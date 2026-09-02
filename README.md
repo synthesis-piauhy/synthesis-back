@@ -41,7 +41,7 @@ A API usa JWT no cabeçalho `Authorization: Bearer <access>`.
 - `POST /api/token/verify` — verifica um token.
 - `GET /api/me` — devolve o usuário autenticado.
 
-Os usuários são administrados inicialmente pelo Django Admin. Os papéis são `gestor`, `gerente` e `admin`.
+Usuários, áreas, ciclos e grupos podem ser administrados pela interface em `/administracao`. Os papéis são `gestor`, `gerente` e `admin`.
 
 ## Contrato principal
 
@@ -94,3 +94,24 @@ introdução posterior de Celery/Redis sem alterar o contrato HTTP.
 
 Arquivos ficam em `media/` durante o desenvolvimento. Quando `AWS_STORAGE_BUCKET_NAME` estiver definido, o
 backend utiliza o storage S3 do `django-storages`; `AWS_S3_ENDPOINT_URL` permite serviços compatíveis com S3.
+
+## Administração pelo frontend
+
+A API `/api/administration` exige um usuário ativo com perfil `admin`. O frontend usa os seguintes endpoints:
+
+- `GET /api/administration/resources`: recursos, campos, opções, contagens e ações permitidas.
+- `GET /api/administration/{resource}?q=&page=1`: busca paginada, 25 registros por página.
+- `GET /api/administration/{resource}/{id}`: detalhes de um registro.
+- `POST /api/administration/{resource}`: criação com `{"values": {...}}`.
+- `PUT /api/administration/{resource}/{id}`: atualização completa dos campos do formulário.
+- `DELETE /api/administration/{resource}/{id}`: exclusão, bloqueada quando houver vínculos protegidos.
+
+Recursos com cadastro e edição: `users`, `areas`, `cycles`, `groups`.
+Recursos de consulta: `permissions`, `activities`, `photos`, `reports`, `sections`, `cards`, `versions`, `audit`.
+
+As senhas são validadas e armazenadas como hash; uma senha vazia na edição preserva a senha atual.
+Grupos, permissões individuais, acesso ao Django Admin e privilégios de superusuário só podem ser
+alterados por superusuários. Os grupos controlam permissões técnicas do Django; os perfis do synthesis
+continuam controlando as operações editoriais e de coleta. Um administrador não pode excluir ou desativar
+seu próprio acesso. Registros de negócio e versões são consultados sem alterar os fluxos de autoria.
+Criação, atualização, redefinição de senha e exclusão administrativa geram eventos de auditoria sem segredos.

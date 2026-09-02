@@ -2,6 +2,7 @@ from ninja_extra import NinjaExtraAPI
 from ninja_jwt.authentication import JWTAuth
 from ninja_jwt.controller import NinjaJWTDefaultController
 
+from .administration import AdministrationController
 from .controllers import (
     ActivityReportController,
     AreaController,
@@ -29,4 +30,5 @@ api.register_controllers(
     ActivityReportController,
     CollectionController,
     WeeklyReportController,
+    AdministrationController,
 )

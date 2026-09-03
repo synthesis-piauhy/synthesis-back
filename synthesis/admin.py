@@ -42,8 +42,23 @@ admin.site.register(Area)
 admin.site.register(WeeklyCycle)
 admin.site.register(ActivityReport)
 admin.site.register(ActivityPhoto)
-admin.site.register(WeeklyReport)
-admin.site.register(ReportSection)
-admin.site.register(ReportCard)
-admin.site.register(ReportVersion)
-admin.site.register(AuditEvent)
+
+
+class DerivedReportAdmin(admin.ModelAdmin):
+    """Mosaicos e seus artefatos só podem ser alterados pelo fluxo editorial."""
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+admin.site.register(WeeklyReport, DerivedReportAdmin)
+admin.site.register(ReportSection, DerivedReportAdmin)
+admin.site.register(ReportCard, DerivedReportAdmin)
+admin.site.register(ReportVersion, DerivedReportAdmin)
+admin.site.register(AuditEvent, DerivedReportAdmin)

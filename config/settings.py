@@ -59,12 +59,12 @@ TEMPLATES = [
 ]
 
 database_url = os.getenv("DATABASE_URL") or f"sqlite:///{BASE_DIR / 'db.sqlite3'}"
-if "pytest" in sys.modules or "pytest" in sys.argv[0]:
-    database_url = f"sqlite:///{BASE_DIR / 'test.sqlite3'}"
+if "pytest" in sys.modules or any("pytest" in argument for argument in sys.argv):
+    database_url = os.getenv("TEST_DATABASE_URL") or f"sqlite:///{BASE_DIR / 'test.sqlite3'}"
 
 DATABASES = {
-    "default": dj_database_url.config(
-        default=database_url,
+    "default": dj_database_url.parse(
+        database_url,
         conn_max_age=60,
         conn_health_checks=True,
     )

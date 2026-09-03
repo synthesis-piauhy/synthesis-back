@@ -130,6 +130,7 @@ def report_queryset():
         "sections__area",
         "sections__cards__area",
         "sections__cards__selected_photo",
+        "sections__cards__activity_report__manager",
     )
 
 
@@ -182,6 +183,9 @@ def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> 
                 selected_photo=selected_photo,
                 area=activity.area,
                 original_date=activity.date,
+                original_location=activity.location,
+                original_beneficiaries=activity.beneficiaries,
+                original_manager_name=activity.manager.name,
                 order=card_order,
             )
     audit(actor, "report.draft_generated", report, activities=[str(value) for value in activity_ids])

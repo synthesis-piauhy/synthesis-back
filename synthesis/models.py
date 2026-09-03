@@ -4,6 +4,7 @@ from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
+from django.db.models.functions import Lower
 
 from .managers import UserManager
 from .validators import validate_image_content_type, validate_image_size
@@ -25,6 +26,13 @@ class Area(TimestampedModel):
 
     class Meta:
         ordering = ("order", "name")
+        constraints = [
+            models.UniqueConstraint(Lower("name"), name="area_name_ci_unique"),
+            models.CheckConstraint(condition=~Q(name=""), name="area_name_not_empty"),
+        ]
+        indexes = [
+            models.Index(fields=("active", "order"), name="area_active_order_idx"),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -51,6 +59,18 @@ class User(AbstractUser):
 
     class Meta:
         ordering = ("name", "email")
+        constraints = [
+            models.UniqueConstraint(Lower("email"), name="user_email_ci_unique"),
+            models.CheckConstraint(condition=~Q(name=""), name="user_name_not_empty"),
+            models.CheckConstraint(condition=Q(role__in=UserRole.values), name="user_role_valid"),
+            models.CheckConstraint(
+                condition=~Q(role=UserRole.MANAGER) | Q(area__isnull=False),
+                name="manager_requires_area",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("role", "active"), name="user_role_active_idx"),
+        ]
 
     def clean(self) -> None:
         super().clean()
@@ -83,6 +103,18 @@ class WeeklyCycle(TimestampedModel):
         ordering = ("-starts_at",)
         constraints = [
             models.CheckConstraint(condition=Q(ends_at__gte=models.F("starts_at")), name="cycle_dates_valid"),
+            models.CheckConstraint(condition=~Q(label=""), name="cycle_label_not_empty"),
+            models.CheckConstraint(
+                condition=Q(status__in=CollectionStatus.values),
+                name="cycle_status_valid",
+            ),
+            models.CheckConstraint(
+                condition=~Q(status=CollectionStatus.REOPENED) | ~Q(reopen_reason=""),
+                name="reopened_cycle_has_reason",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("status", "-starts_at"), name="cycle_status_start_idx"),
         ]
 
     @property
@@ -106,6 +138,21 @@ class ActivityReport(TimestampedModel):
 
     class Meta:
         ordering = ("-date", "-created_at")
+        constraints = [
+            models.CheckConstraint(condition=~Q(title=""), name="activity_title_not_empty"),
+            models.CheckConstraint(condition=~Q(location=""), name="activity_location_not_empty"),
+            models.CheckConstraint(condition=~Q(summary=""), name="activity_summary_not_empty"),
+            models.CheckConstraint(condition=~Q(result=""), name="activity_result_not_empty"),
+            models.CheckConstraint(
+                condition=~Q(beneficiaries=""),
+                name="activity_beneficiaries_not_empty",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("cycle", "-date", "-created_at"), name="activity_cycle_date_idx"),
+            models.Index(fields=("manager", "cycle"), name="activity_manager_cycle_idx"),
+            models.Index(fields=("area", "cycle"), name="activity_area_cycle_idx"),
+        ]
 
     def clean(self) -> None:
         super().clean()
@@ -144,6 +191,9 @@ class ActivityPhoto(TimestampedModel):
                 name="one_main_photo_per_activity",
             )
         ]
+        indexes = [
+            models.Index(fields=("activity_report", "-is_main"), name="photo_activity_main_idx"),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -164,6 +214,9 @@ class WeeklyReport(TimestampedModel):
 
     class Meta:
         ordering = ("-cycle__starts_at",)
+        constraints = [
+            models.CheckConstraint(condition=Q(status__in=ReportStatus.values), name="report_status_valid"),
+        ]
 
     def __str__(self) -> str:
         return f"Relatório — {self.cycle.label}"
@@ -180,6 +233,9 @@ class ReportSection(TimestampedModel):
         constraints = [
             models.UniqueConstraint(fields=("weekly_report", "area"), name="one_section_per_area_report")
         ]
+        indexes = [
+            models.Index(fields=("weekly_report", "order"), name="section_report_order_idx"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.weekly_report} — {self.title}"
@@ -194,6 +250,9 @@ class ReportCard(TimestampedModel):
     selected_photo = models.ForeignKey(ActivityPhoto, on_delete=models.PROTECT, related_name="report_cards")
     area = models.ForeignKey(Area, on_delete=models.PROTECT, related_name="report_cards")
     original_date = models.DateField()
+    original_location = models.CharField(max_length=200)
+    original_beneficiaries = models.CharField(max_length=240)
+    original_manager_name = models.CharField(max_length=150)
     order = models.PositiveSmallIntegerField(default=0)
     removed = models.BooleanField(default=False)
 
@@ -201,6 +260,12 @@ class ReportCard(TimestampedModel):
         ordering = ("order",)
         constraints = [
             models.UniqueConstraint(fields=("section", "activity_report"), name="one_activity_per_section"),
+            models.CheckConstraint(condition=~Q(editorial_title=""), name="card_title_not_empty"),
+            models.CheckConstraint(condition=~Q(editorial_summary=""), name="card_summary_not_empty"),
+            models.CheckConstraint(condition=~Q(editorial_result=""), name="card_result_not_empty"),
+        ]
+        indexes = [
+            models.Index(fields=("section", "removed", "order"), name="card_section_state_order_idx"),
         ]
 
     def __str__(self) -> str:
@@ -223,7 +288,11 @@ class ReportVersion(TimestampedModel):
     class Meta:
         ordering = ("version",)
         constraints = [
-            models.UniqueConstraint(fields=("weekly_report", "version"), name="unique_report_version")
+            models.UniqueConstraint(fields=("weekly_report", "version"), name="unique_report_version"),
+            models.CheckConstraint(condition=Q(version__gte=1), name="report_version_positive"),
+        ]
+        indexes = [
+            models.Index(fields=("weekly_report", "-generated_at"), name="version_report_date_idx"),
         ]
 
     def __str__(self) -> str:
@@ -241,6 +310,16 @@ class AuditEvent(models.Model):
 
     class Meta:
         ordering = ("-created_at",)
+        constraints = [
+            models.CheckConstraint(condition=~Q(action=""), name="audit_action_not_empty"),
+            models.CheckConstraint(condition=~Q(entity=""), name="audit_entity_not_empty"),
+            models.CheckConstraint(condition=~Q(entity_id=""), name="audit_entity_id_not_empty"),
+        ]
+        indexes = [
+            models.Index(fields=("entity", "entity_id"), name="audit_entity_lookup_idx"),
+            models.Index(fields=("actor", "-created_at"), name="audit_actor_date_idx"),
+            models.Index(fields=("-created_at",), name="audit_created_idx"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.action} — {self.entity}:{self.entity_id}"

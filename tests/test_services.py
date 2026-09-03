@@ -104,6 +104,15 @@ def test_editorial_changes_never_change_original(activity, editor):
 
 
 @pytest.mark.django_db
+def test_draft_keeps_metadata_snapshot(activity, editor):
+    report = generate_draft(actor=editor, cycle_id=activity.cycle_id, activity_ids=[activity.id])
+    card = ReportCard.objects.get(section__weekly_report=report)
+    assert card.original_location == activity.location
+    assert card.original_beneficiaries == activity.beneficiaries
+    assert card.original_manager_name == activity.manager.name
+
+
+@pytest.mark.django_db
 def test_remove_card_keeps_original(activity, editor):
     report = generate_draft(actor=editor, cycle_id=activity.cycle_id, activity_ids=[activity.id])
     card = ReportCard.objects.get(section__weekly_report=report)
@@ -120,3 +129,16 @@ def test_pdf_versions_are_incremental_and_immutable(activity, editor):
     assert (first.version, second.version) == (1, 2)
     assert first.pdf.name != second.pdf.name
     assert ReportVersion.objects.filter(weekly_report=report).count() == 2
+
+
+@pytest.mark.django_db
+def test_pdf_includes_the_selected_photo(activity, editor):
+    report = generate_draft(actor=editor, cycle_id=activity.cycle_id, activity_ids=[activity.id])
+    version = generate_pdf_version(actor=editor, report_id=report.id)
+    version.pdf.open("rb")
+    try:
+        content = version.pdf.read()
+    finally:
+        version.pdf.close()
+    assert content.startswith(b"%PDF")
+    assert b"/Subtype /Image" in content

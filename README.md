@@ -30,7 +30,11 @@ A documentação OpenAPI fica em `http://localhost:8000/api/docs` e o Django Adm
 
 Sem um arquivo `.env`, ou com `DATABASE_URL` vazio, o desenvolvimento usa SQLite para permitir uma
 inicialização imediata. Para PostgreSQL, preencha as variáveis `POSTGRES_*` e `DATABASE_URL` no `.env` antes
-de iniciar o `compose.yaml`. Os testes sempre usam um SQLite isolado.
+de iniciar o `compose.yaml`. Os testes usam um SQLite isolado por padrão; defina `TEST_DATABASE_URL` com um
+banco PostgreSQL exclusivamente descartável para validar a suíte no mesmo mecanismo de produção.
+
+O diagrama, as responsabilidades das tabelas, constraints, índices e políticas de exclusão estão descritos
+em [`docs/database.md`](docs/database.md).
 
 ## Autenticação
 

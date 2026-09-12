@@ -3,6 +3,7 @@ from datetime import datetime as DateTime
 from uuid import UUID
 
 from ninja import Schema
+from pydantic import Field
 
 
 class MessageOut(Schema):
@@ -52,22 +53,22 @@ class ActivityReportOut(Schema):
 
 
 class ActivityCreateIn(Schema):
-    title: str
+    title: str = Field(min_length=3, max_length=200)
     date: Date
-    location: str
-    summary: str
-    result: str
-    beneficiaries: str
+    location: str = Field(min_length=2, max_length=200)
+    summary: str = Field(min_length=10, max_length=10000)
+    result: str = Field(min_length=10, max_length=10000)
+    beneficiaries: str = Field(min_length=2, max_length=240)
     cycleId: UUID
 
 
 class ActivityUpdateIn(Schema):
-    title: str | None = None
+    title: str | None = Field(default=None, min_length=3, max_length=200)
     date: Date | None = None
-    location: str | None = None
-    summary: str | None = None
-    result: str | None = None
-    beneficiaries: str | None = None
+    location: str | None = Field(default=None, min_length=2, max_length=200)
+    summary: str | None = Field(default=None, min_length=10, max_length=10000)
+    result: str | None = Field(default=None, min_length=10, max_length=10000)
+    beneficiaries: str | None = Field(default=None, min_length=2, max_length=240)
 
 
 class ReportCardOut(Schema):
@@ -118,21 +119,21 @@ class CollectionOverviewOut(Schema):
 
 
 class ReopenCollectionIn(Schema):
-    reason: str
+    reason: str = Field(min_length=5, max_length=2000)
     newDeadline: DateTime
 
 
 class GenerateDraftIn(Schema):
     cycleId: UUID
-    activityIds: list[UUID]
+    activityIds: list[UUID] = Field(min_length=1, max_length=500)
 
 
 class ReportCardUpdateIn(Schema):
-    editorialTitle: str | None = None
-    editorialSummary: str | None = None
-    editorialResult: str | None = None
+    editorialTitle: str | None = Field(default=None, max_length=200)
+    editorialSummary: str | None = Field(default=None, max_length=10000)
+    editorialResult: str | None = Field(default=None, max_length=10000)
     selectedPhotoId: UUID | None = None
 
 
 class ReorderCardsIn(Schema):
-    cardIds: list[UUID]
+    cardIds: list[UUID] = Field(min_length=1, max_length=500)

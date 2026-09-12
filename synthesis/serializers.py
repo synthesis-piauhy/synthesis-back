@@ -40,7 +40,7 @@ def activity_data(activity: ActivityReport, request: HttpRequest) -> dict:
         "photos": [
             {
                 "id": photo.id,
-                "url": request.build_absolute_uri(photo.image.url),
+                "url": request.build_absolute_uri(f"/api/files/photos/{photo.id}"),
                 "name": photo.name,
                 "isMain": photo.is_main,
                 "alt": photo.alt,
@@ -67,13 +67,13 @@ def card_data(card: ReportCard) -> dict:
     }
 
 
-def section_data(section: ReportSection) -> dict:
+def section_data(section: ReportSection, include_cards=True) -> dict:
     return {
         "id": section.id,
         "area": section.area.name,
         "title": section.title,
         "order": section.order,
-        "cards": [card_data(card) for card in section.cards.all()],
+        "cards": [card_data(card) for card in section.cards.all()] if include_cards else [],
     }
 
 
@@ -83,17 +83,19 @@ def version_data(version: ReportVersion, request: HttpRequest) -> dict:
         "version": version.version,
         "generatedAt": version.generated_at,
         "generatedBy": version.generated_by_id,
-        "pdfUrl": request.build_absolute_uri(version.pdf.url),
+        "pdfUrl": request.build_absolute_uri(f"/api/files/versions/{version.id}"),
     }
 
 
-def report_data(report: WeeklyReport, request: HttpRequest) -> dict:
+def report_data(report: WeeklyReport, request: HttpRequest, summary=False) -> dict:
+    sections = [section_data(section, include_cards=not summary) for section in report.sections.all()]
+    versions = list(report.versions.all())
     return {
         "id": report.id,
         "cycleId": report.cycle_id,
         "status": report.status,
-        "selectedActivityIds": list(report.selected_activities.values_list("id", flat=True)),
-        "sections": [section_data(section) for section in report.sections.all()],
-        "versions": [version_data(version, request) for version in report.versions.all()],
+        "selectedActivityIds": [item.pk for item in report.selected_activities.all()],
+        "sections": sections,
+        "versions": [version_data(version, request) for version in (versions[-1:] if summary else versions)],
         "updatedAt": report.updated_at,
     }

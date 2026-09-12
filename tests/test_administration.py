@@ -3,6 +3,8 @@ from datetime import timedelta
 
 import pytest
 from django.contrib.auth.models import Group, Permission
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from synthesis.administration import RESOURCES
@@ -215,3 +217,18 @@ def test_domain_and_history_resources_are_read_only(admin_user, activity, editor
     assert call(admin_user, "delete", f"versions/{version.pk}").status_code == 403
     assert call(admin_user, "post", "audit", {"action": "forged"}).status_code == 403
     assert call(admin_user, "delete", f"activities/{activity.pk}").status_code == 403
+
+
+@pytest.mark.parametrize("user_count", [1, 10, 25])
+def test_user_list_query_budget(admin_user, area, user_count):
+    User.objects.bulk_create(
+        [
+            User(email=f"person-{index}@example.org", name=f"Pessoa {index}", role="gestor", area=area)
+            for index in range(user_count)
+        ]
+    )
+    client, headers = authenticated_client(admin_user)
+    with CaptureQueriesContext(connection) as queries:
+        response = client.get("/api/administration/users", **headers)
+    assert response.status_code == 200
+    assert len(queries) <= 20, [query["sql"] for query in queries]

@@ -7,7 +7,7 @@ from django.db.models import Q
 from django.db.models.functions import Lower
 
 from .managers import UserManager
-from .validators import validate_image_content_type, validate_image_size
+from .validators import normalize_image, validate_image_content_type, validate_image_size
 
 
 class TimestampedModel(models.Model):
@@ -50,6 +50,7 @@ class User(AbstractUser):
     email = models.EmailField(unique=True)
     name = models.CharField(max_length=150)
     role = models.CharField(max_length=16, choices=UserRole.choices, default=UserRole.MANAGER)
+    session_version = models.PositiveIntegerField(default=0, editable=False)
     area = models.ForeignKey(Area, on_delete=models.PROTECT, related_name="users", null=True, blank=True)
     active = models.BooleanField(default=True)
 
@@ -79,6 +80,21 @@ class User(AbstractUser):
 
     def save(self, *args, **kwargs):
         self.is_active = self.active
+        if not self._state.adding:
+            previous = (
+                type(self)
+                .objects.filter(pk=self.pk)
+                .values("active", "role", "password", "session_version")
+                .first()
+            )
+            if previous and (
+                previous["active"] != self.active
+                or previous["role"] != self.role
+                or previous["password"] != self.password
+            ):
+                self.session_version = previous["session_version"] + 1
+                if kwargs.get("update_fields") is not None:
+                    kwargs["update_fields"] = set(kwargs["update_fields"]) | {"session_version", "is_active"}
         return super().save(*args, **kwargs)
 
     def __str__(self) -> str:
@@ -181,6 +197,21 @@ class ActivityPhoto(TimestampedModel):
     name = models.CharField(max_length=255)
     is_main = models.BooleanField(default=False)
     alt = models.CharField(max_length=255, blank=True)
+    is_normalized = models.BooleanField(default=False, editable=False)
+
+    def save(self, *args, **kwargs):
+        is_upload = bool(self.image and not self.image._committed)
+        if is_upload:
+            self.image = normalize_image(self.image.file)
+            self.is_normalized = True
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = set(kwargs["update_fields"]) | {"image", "is_normalized"}
+        try:
+            return super().save(*args, **kwargs)
+        except Exception:
+            if is_upload and self.image._committed:
+                self.image.storage.delete(self.image.name)
+            raise
 
     class Meta:
         ordering = ("-is_main", "created_at")
@@ -210,6 +241,7 @@ class ReportStatus(models.TextChoices):
 class WeeklyReport(TimestampedModel):
     cycle = models.OneToOneField(WeeklyCycle, on_delete=models.PROTECT, related_name="weekly_report")
     status = models.CharField(max_length=20, choices=ReportStatus.choices, default=ReportStatus.DRAFT)
+    content_version = models.PositiveIntegerField(default=0, editable=False)
     selected_activities = models.ManyToManyField(ActivityReport, related_name="weekly_reports", blank=True)
 
     class Meta:
@@ -323,3 +355,12 @@ class AuditEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.action} — {self.entity}:{self.entity_id}"
+
+
+class RateWindow(models.Model):
+    key = models.CharField(max_length=64, primary_key=True)
+    count = models.PositiveIntegerField(default=0)
+    expires_at = models.DateTimeField(db_index=True)
+
+    def __str__(self):
+        return self.key

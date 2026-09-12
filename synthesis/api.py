@@ -1,8 +1,7 @@
 from ninja_extra import NinjaExtraAPI
-from ninja_jwt.authentication import JWTAuth
-from ninja_jwt.controller import NinjaJWTDefaultController
 
 from .administration import AdministrationController
+from .authentication import BrowserSessionAuth
 from .controllers import (
     ActivityReportController,
     AreaController,
@@ -13,15 +12,16 @@ from .controllers import (
     UserController,
     WeeklyReportController,
 )
+from .files import FileController
 
 api = NinjaExtraAPI(
     title="synthesis API",
     version="0.1.0",
     description="API editorial e de coleta semanal da plataforma synthesis.",
-    auth=JWTAuth(),
+    auth=BrowserSessionAuth(),
 )
 api.register_controllers(
-    NinjaJWTDefaultController,
+    FileController,
     HealthController,
     AuthenticatedUserController,
     AreaController,

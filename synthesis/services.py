@@ -1,10 +1,12 @@
+import logging
 from collections import defaultdict
+from time import monotonic
 from uuid import UUID
 
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import F, Max
 from django.utils import timezone
 
 from .models import (
@@ -21,7 +23,9 @@ from .models import (
     WeeklyReport,
 )
 from .pdf import render_report_pdf
-from .validators import ALLOWED_IMAGE_TYPES, MAX_IMAGE_SIZE
+from .validators import MAX_PHOTOS, MAX_UPLOAD_BYTES, normalize_image
+
+logger = logging.getLogger(__name__)
 
 
 class DomainError(Exception):
@@ -49,22 +53,29 @@ def _validate_text(data: dict) -> None:
             raise DomainError(f"O campo {field} precisa ter ao menos {minimum} caracteres.")
 
 
-def _validate_upload(upload) -> None:
-    if upload.size > MAX_IMAGE_SIZE:
-        raise DomainError("Cada imagem deve ter no máximo 5 MB.")
-    if upload.content_type not in ALLOWED_IMAGE_TYPES:
-        raise DomainError("Use imagens JPEG, PNG ou WebP.")
-
-
-@transaction.atomic
 def create_activity(*, actor: User, data: dict, photos: list) -> ActivityReport:
+    if len(photos) > MAX_PHOTOS or sum(photo.size for photo in photos) > MAX_UPLOAD_BYTES:
+        raise DomainError("Envie até 10 fotos, somando no máximo 25 MB.")
+    try:
+        normalized = [normalize_image(photo) for photo in photos]
+    except ValidationError as exc:
+        raise DomainError(" ".join(exc.messages)) from exc
+    saved_files = []
+    try:
+        with transaction.atomic():
+            return _create_activity(actor=actor, data=data.copy(), photos=normalized, saved_files=saved_files)
+    except Exception:
+        for storage, name in saved_files:
+            storage.delete(name)
+        raise
+
+
+def _create_activity(*, actor: User, data: dict, photos: list, saved_files: list) -> ActivityReport:
     if not photos:
         raise DomainError("Uma foto principal é obrigatória.")
     if not actor.area_id:
         raise DomainError("O gestor precisa estar vinculado a uma área.")
     _validate_text(data)
-    for photo in photos:
-        _validate_upload(photo)
     try:
         cycle = WeeklyCycle.objects.get(pk=data.pop("cycleId"))
     except WeeklyCycle.DoesNotExist as exc:
@@ -81,12 +92,13 @@ def create_activity(*, actor: User, data: dict, photos: list) -> ActivityReport:
         photo = ActivityPhoto(
             activity_report=report,
             image=upload,
-            name=upload.name,
-            alt=upload.name,
+            name=getattr(upload, "_synthesis_original_name", upload.name),
+            alt=getattr(upload, "_synthesis_original_name", upload.name),
             is_main=index == 0,
         )
         photo.full_clean()
         photo.save()
+        saved_files.append((photo.image.storage, photo.image.name))
     audit(actor, "activity.created", report)
     return report
 
@@ -141,7 +153,7 @@ def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> 
     if len(set(activity_ids)) != len(activity_ids):
         raise DomainError("A seleção contém relatos duplicados.")
     try:
-        cycle = WeeklyCycle.objects.get(pk=cycle_id)
+        cycle = WeeklyCycle.objects.select_for_update().get(pk=cycle_id)
     except WeeklyCycle.DoesNotExist as exc:
         raise DomainError("Ciclo não encontrado.", 404) from exc
     existing = report_queryset().filter(cycle=cycle).first()
@@ -194,6 +206,12 @@ def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> 
 
 @transaction.atomic
 def update_card(*, actor: User, card: ReportCard, changes: dict) -> ReportCard:
+    WeeklyReport.objects.select_for_update().get(pk=card.section.weekly_report_id)
+    card = (
+        ReportCard.objects.select_for_update()
+        .select_related("activity_report", "section__weekly_report", "area")
+        .get(pk=card.pk)
+    )
     photo_id = changes.pop("selectedPhotoId", None)
     field_map = {
         "editorialTitle": "editorial_title",
@@ -215,6 +233,7 @@ def update_card(*, actor: User, card: ReportCard, changes: dict) -> ReportCard:
     card.save()
     WeeklyReport.objects.filter(pk=card.section.weekly_report_id).update(
         status=ReportStatus.EDITING,
+        content_version=F("content_version") + 1,
         updated_at=timezone.now(),
     )
     audit(actor, "report.card_updated", card, fields=sorted(changes))
@@ -223,7 +242,9 @@ def update_card(*, actor: User, card: ReportCard, changes: dict) -> ReportCard:
 
 @transaction.atomic
 def reorder_cards(*, actor: User, section: ReportSection, card_ids: list[UUID]) -> WeeklyReport:
-    cards = {card.id: card for card in section.cards.all()}
+    WeeklyReport.objects.select_for_update().get(pk=section.weekly_report_id)
+    section = ReportSection.objects.select_for_update().get(pk=section.pk)
+    cards = {card.id: card for card in section.cards.select_for_update()}
     if len(card_ids) != len(set(card_ids)) or set(card_ids) != set(cards):
         raise DomainError("A ordenação deve conter cada card da seção exatamente uma vez.")
     for order, card_id in enumerate(card_ids):
@@ -232,36 +253,70 @@ def reorder_cards(*, actor: User, section: ReportSection, card_ids: list[UUID]) 
         card.save(update_fields=("order", "updated_at"))
     report = section.weekly_report
     report.status = ReportStatus.EDITING
-    report.save(update_fields=("status", "updated_at"))
+    report.content_version += 1
+    report.save(update_fields=("status", "content_version", "updated_at"))
     audit(actor, "report.cards_reordered", section, cards=[str(value) for value in card_ids])
     return report_queryset().get(pk=report.pk)
 
 
 @transaction.atomic
 def remove_card(*, actor: User, card: ReportCard) -> WeeklyReport:
+    WeeklyReport.objects.select_for_update().get(pk=card.section.weekly_report_id)
+    card = ReportCard.objects.select_for_update().select_related("section__weekly_report").get(pk=card.pk)
     card.removed = True
     card.save(update_fields=("removed", "updated_at"))
     report = card.section.weekly_report
     report.status = ReportStatus.EDITING
-    report.save(update_fields=("status", "updated_at"))
+    report.content_version += 1
+    report.save(update_fields=("status", "content_version", "updated_at"))
     audit(actor, "report.card_removed", card)
     return report_queryset().get(pk=report.pk)
 
 
-@transaction.atomic
 def generate_pdf_version(*, actor: User, report_id: UUID) -> ReportVersion:
-    try:
-        report = report_queryset().select_for_update().get(pk=report_id)
-    except WeeklyReport.DoesNotExist as exc:
-        raise DomainError("Relatório não encontrado.", 404) from exc
-    if not ReportCard.objects.filter(section__weekly_report=report, removed=False).exists():
-        raise DomainError("O relatório precisa ter ao menos um card ativo.")
-    next_version = (report.versions.aggregate(value=Max("version"))["value"] or 0) + 1
+    started = monotonic()
+    with transaction.atomic():
+        try:
+            report = report_queryset().select_for_update().get(pk=report_id)
+        except WeeklyReport.DoesNotExist as exc:
+            raise DomainError("Relatório não encontrado.", 404) from exc
+        if not any(not card.removed for section in report.sections.all() for card in section.cards.all()):
+            raise DomainError("O relatório precisa ter ao menos um card ativo.")
+        snapshot_content_version = report.content_version
+
+    # Report content has been fully prefetched and can be rendered without holding a database lock.
     pdf_content = render_report_pdf(report)
-    version = ReportVersion(weekly_report=report, version=next_version, generated_by=actor)
-    version.pdf.save(f"{report.id}-v{next_version}.pdf", ContentFile(pdf_content), save=False)
-    version.save()
-    report.status = ReportStatus.PDF_GENERATED
-    report.save(update_fields=("status", "updated_at"))
-    audit(actor, "report.pdf_generated", version, version=next_version)
+    saved_file = None
+    try:
+        with transaction.atomic():
+            current = WeeklyReport.objects.select_for_update().get(pk=report_id)
+            if current.content_version != snapshot_content_version:
+                raise DomainError("O relatório mudou durante a geração. Gere o PDF novamente.", 409)
+            next_version = (
+                ReportVersion.objects.filter(weekly_report=current).aggregate(value=Max("version"))["value"]
+                or 0
+            ) + 1
+            version = ReportVersion(weekly_report=current, version=next_version, generated_by=actor)
+            version.pdf.save(f"{current.id}-v{next_version}.pdf", ContentFile(pdf_content), save=False)
+            saved_file = (version.pdf.storage, version.pdf.name)
+            version.save()
+            current.status = ReportStatus.PDF_GENERATED
+            current.save(update_fields=("status", "updated_at"))
+            audit(actor, "report.pdf_generated", version, version=next_version)
+    except Exception:
+        if saved_file:
+            saved_file[0].delete(saved_file[1])
+        logger.exception(
+            "pdf_generation_failed",
+            extra={"report_id": str(report_id), "actor_id": str(actor.pk)},
+        )
+        raise
+    logger.info(
+        "pdf_generation_completed",
+        extra={
+            "report_id": str(report_id),
+            "version": version.version,
+            "duration_ms": round((monotonic() - started) * 1000),
+        },
+    )
     return version

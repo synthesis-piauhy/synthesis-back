@@ -1,6 +1,9 @@
+from datetime import timedelta
+from unittest.mock import patch
+
 import pytest
 
-from synthesis.models import ActivityReport, AuditEvent, ReportCard, ReportVersion
+from synthesis.models import ActivityReport, AuditEvent, ReportCard, ReportVersion, WeeklyReport
 from synthesis.services import (
     DomainError,
     create_activity,
@@ -142,3 +145,29 @@ def test_pdf_includes_the_selected_photo(activity, editor):
         version.pdf.close()
     assert content.startswith(b"%PDF")
     assert b"/Subtype /Image" in content
+
+
+@pytest.mark.django_db
+def test_pdf_rejects_stale_snapshot(activity, editor):
+    report = generate_draft(actor=editor, cycle_id=activity.cycle_id, activity_ids=[activity.id])
+
+    def edit_during_render(snapshot):
+        WeeklyReport.objects.filter(pk=snapshot.pk).update(
+            updated_at=snapshot.updated_at + timedelta(seconds=1),
+            content_version=snapshot.content_version + 1,
+        )
+        return b"%PDF-stale"
+
+    with patch("synthesis.services.render_report_pdf", side_effect=edit_during_render):
+        with pytest.raises(DomainError, match="mudou durante"):
+            generate_pdf_version(actor=editor, report_id=report.id)
+    assert not ReportVersion.objects.filter(weekly_report=report).exists()
+
+
+@pytest.mark.django_db
+def test_pdf_storage_is_compensated_when_database_save_fails(activity, editor, settings):
+    report = generate_draft(actor=editor, cycle_id=activity.cycle_id, activity_ids=[activity.id])
+    with patch.object(ReportVersion, "save", side_effect=OSError("database unavailable")):
+        with pytest.raises(OSError):
+            generate_pdf_version(actor=editor, report_id=report.id)
+    assert not list(settings.MEDIA_ROOT.rglob("*.pdf"))

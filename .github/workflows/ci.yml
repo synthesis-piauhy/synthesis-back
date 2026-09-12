@@ -3,10 +3,27 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "17 9 * * 1"
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: synthesis_test
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: synthesis_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U synthesis_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      APP_ENV: test
+      TEST_DATABASE_URL: postgresql://synthesis_test:ci-only-password@localhost:5432/synthesis_test
+      DATABASE_URL: postgresql://synthesis_test:ci-only-password@localhost:5432/synthesis_test
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -18,4 +35,15 @@ jobs:
       - run: uv run python manage.py check
       - run: uv run python manage.py makemigrations --check
       - run: uv run pytest
-
+      - name: Check production settings
+        env:
+          APP_ENV: production
+          DEBUG: "false"
+          SECRET_KEY: ci-Django-A9b8C7d6E5f4G3h2I1j0K9l8M7n6O5p4Q3r2S1t0U9v8
+          ALLOWED_HOSTS: synthesis.example.org
+          PUBLIC_ORIGIN: https://synthesis.example.org
+          DATABASE_URL: postgresql://synthesis_test:ci-only-password@localhost:5432/synthesis_test
+          DATABASE_LOCAL_PRIVATE: "true"
+        run: uv run python manage.py check --deploy --fail-level WARNING
+      - run: uv export --quiet --locked --no-dev --no-emit-project --format requirements-txt -o /tmp/synthesis-requirements.txt
+      - run: uvx pip-audit -r /tmp/synthesis-requirements.txt

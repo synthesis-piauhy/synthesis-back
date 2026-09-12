@@ -8,7 +8,7 @@ from django.contrib.auth.models import Group, Permission
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import ProtectedError, Q
+from django.db.models import Prefetch, ProtectedError, Q
 from django.forms.models import model_to_dict
 from django.shortcuts import get_object_or_404
 from ninja import Schema
@@ -361,6 +361,15 @@ def queryset(key):
             relations.append(name)
         if field.many_to_many:
             multiple.append(name)
+    if key == "users":
+        return qs.select_related(*relations).prefetch_related(
+            "groups",
+            Prefetch("user_permissions", queryset=Permission.objects.select_related("content_type")),
+        )
+    if key == "groups":
+        return qs.select_related(*relations).prefetch_related(
+            Prefetch("permissions", queryset=Permission.objects.select_related("content_type"))
+        )
     return qs.select_related(*relations).prefetch_related(*multiple)
 
 
@@ -385,37 +394,46 @@ def detail_names(key, actor):
     return names
 
 
-def record_data(key, obj, request):
-    values, display, files = {}, {}, {}
-    editable = form_class(key, request.user)
-    if editable:
-        fields = list(editable.base_fields)
-        values = model_to_dict(obj, fields=[field for field in fields if field != "password"])
-        for field in fields:
-            if field == "password":
-                continue
-            model_field = obj._meta.get_field(field)
-            if model_field.many_to_many:
-                values[field] = [str(item.pk) for item in getattr(obj, field).all()]
-            elif model_field.is_relation:
-                values[field] = str(values[field]) if values[field] is not None else ""
-            else:
-                values[field] = json_value(values[field])
-    for name in detail_names(key, request.user):
-        field = obj._meta.get_field(name)
-        value = getattr(obj, name)
-        if field.many_to_many:
-            display[name] = [str(item) for item in value.all()]
-        elif field.get_internal_type() in {"FileField", "ImageField"}:
-            display[name] = value.name
-            if value:
-                files[name] = request.build_absolute_uri(value.url)
-        elif field.is_relation:
-            display[name] = str(value) if value else None
-        elif field.choices:
-            display[name] = getattr(obj, f"get_{name}_display")()
+def editable_values(key, obj, actor):
+    editable = form_class(key, actor)
+    if not editable:
+        return {}
+    fields = [name for name in editable.base_fields if name != "password"]
+    values = model_to_dict(obj, fields=fields)
+    for name in fields:
+        model_field = obj._meta.get_field(name)
+        if model_field.many_to_many:
+            values[name] = [str(item.pk) for item in getattr(obj, name).all()]
+        elif model_field.is_relation:
+            values[name] = str(values[name]) if values[name] is not None else ""
         else:
-            display[name] = json_value(value)
+            values[name] = json_value(values[name])
+    return values
+
+
+def display_field(obj, name, request):
+    field = obj._meta.get_field(name)
+    value = getattr(obj, name)
+    if field.many_to_many:
+        return [str(item) for item in value.all()], None
+    if field.get_internal_type() in {"FileField", "ImageField"}:
+        category = "photos" if name == "image" else "versions"
+        url = request.build_absolute_uri(f"/api/files/{category}/{obj.pk}") if value else None
+        return value.name, url
+    if field.is_relation:
+        return str(value) if value else None, None
+    if field.choices:
+        return getattr(obj, f"get_{name}_display")(), None
+    return json_value(value), None
+
+
+def record_data(key, obj, request):
+    values = editable_values(key, obj, request.user)
+    display, files = {}, {}
+    for name in detail_names(key, request.user):
+        display[name], url = display_field(obj, name, request)
+        if url:
+            files[name] = url
     allowed = can_write(key, request.user, obj)
     return {
         "id": str(obj.pk),
@@ -428,49 +446,102 @@ def record_data(key, obj, request):
     }
 
 
-def field_data(name, field):
-    kind, options = "text", []
+def field_options(field):
     if isinstance(field, (forms.ModelMultipleChoiceField, forms.ModelChoiceField)):
-        kind = "multiple" if isinstance(field, forms.ModelMultipleChoiceField) else "select"
         option_qs = field.queryset
         if option_qs.model is Permission:
             option_qs = option_qs.select_related("content_type")
-        options = [{"value": str(obj.pk), "label": str(obj)} for obj in option_qs]
-    elif isinstance(field, forms.ChoiceField):
-        kind = "select"
-        options = [
-            {"value": str(value), "label": str(label)} for value, label in field.choices if value != ""
-        ]
-    elif isinstance(field, forms.BooleanField):
-        kind = "checkbox"
-    elif isinstance(field, forms.DateTimeField):
-        kind = "datetime-local"
-    elif isinstance(field, forms.DateField):
-        kind = "date"
-    elif isinstance(field, forms.IntegerField):
-        kind = "number"
-    elif isinstance(field, forms.EmailField):
-        kind = "email"
-    elif isinstance(field.widget, forms.PasswordInput):
-        kind = "password"
-    elif isinstance(field.widget, forms.Textarea):
-        kind = "textarea"
-    help_text = ""
+        return [{"value": str(obj.pk), "label": str(obj)} for obj in option_qs]
+    if isinstance(field, forms.ChoiceField):
+        return [{"value": str(value), "label": str(label)} for value, label in field.choices if value != ""]
+    return []
+
+
+def field_kind(field):
+    mappings = (
+        (forms.ModelMultipleChoiceField, "multiple"),
+        (forms.ModelChoiceField, "select"),
+        (forms.ChoiceField, "select"),
+        (forms.BooleanField, "checkbox"),
+        (forms.DateTimeField, "datetime-local"),
+        (forms.DateField, "date"),
+        (forms.IntegerField, "number"),
+        (forms.EmailField, "email"),
+    )
+    for field_type, kind in mappings:
+        if isinstance(field, field_type):
+            return kind
+    if isinstance(field.widget, forms.PasswordInput):
+        return "password"
+    return "textarea" if isinstance(field.widget, forms.Textarea) else "text"
+
+
+def field_help(name):
     if name == "password":
-        help_text = "Obrigatória ao criar. Deixe em branco ao editar para manter a senha atual."
+        return "Obrigatória ao criar. Deixe em branco ao editar para manter a senha atual."
     if name in {"permissions", "user_permissions", "groups"}:
-        help_text = (
-            "As permissões técnicas controlam o Django Admin; o perfil controla os fluxos do synthesis."
-        )
+        return "As permissões técnicas controlam o Django Admin; o perfil controla os fluxos do synthesis."
+    return ""
+
+
+def field_data(name, field):
     return {
         "name": name,
         "label": str(field.label),
-        "type": kind,
+        "type": field_kind(field),
         "required": field.required,
-        "help": help_text,
+        "help": field_help(name),
         "maxLength": getattr(field, "max_length", None),
-        "options": options,
+        "options": field_options(field),
     }
+
+
+def form_error_message(form):
+    return " ".join(
+        f"{form.fields[name].label if name in form.fields else 'Registro'}: {message}"
+        for name, errors in form.errors.items()
+        for message in errors
+    )
+
+
+def protect_current_admin(request, key, instance, form):
+    if key != "users" or not instance or instance.pk != request.user.pk:
+        return
+    data = form.cleaned_data
+    if not data.get("active") or data.get("role") != "admin":
+        raise HttpError(409, "Você não pode desativar ou remover o próprio perfil de administrador.")
+    if request.user.is_superuser and not data.get("is_superuser"):
+        raise HttpError(409, "Você não pode remover o próprio acesso de superusuário.")
+
+
+def validated_form(request, key, payload, instance):
+    if not can_write(key, request.user, instance):
+        raise HttpError(403, "Você não pode alterar este registro.")
+    form = form_class(key, request.user)(data=payload.values, instance=instance)
+    unknown = set(payload.values) - set(form.fields)
+    if unknown:
+        raise HttpError(400, "Campos não permitidos: " + ", ".join(sorted(unknown)))
+    if not form.is_valid():
+        raise HttpError(400, form_error_message(form))
+    protect_current_admin(request, key, instance, form)
+    return form
+
+
+def persist_form(request, key, instance, form):
+    try:
+        with transaction.atomic():
+            obj = form.save()
+            audit(
+                request.user,
+                f"admin.{key}.{'updated' if instance else 'created'}",
+                obj,
+                fields=sorted(name for name in form.changed_data if name != "password"),
+            )
+            if key == "users" and form.cleaned_data.get("password"):
+                audit(request.user, "admin.users.password_changed", obj)
+    except IntegrityError as error:
+        raise HttpError(409, "Já existe um registro com esses dados.") from error
+    return obj
 
 
 @api_controller("/administration", tags=["administration"], permissions=[AdminOnly()])
@@ -530,40 +601,8 @@ class AdministrationController:
             raise HttpError(404, "Registro não encontrado.") from error
 
     def _save(self, request, key, payload, instance=None):
-        if not can_write(key, request.user, instance):
-            raise HttpError(403, "Você não pode alterar este registro.")
-        form = form_class(key, request.user)(data=payload.values, instance=instance)
-        unknown = set(payload.values) - set(form.fields)
-        if unknown:
-            raise HttpError(400, "Campos não permitidos: " + ", ".join(sorted(unknown)))
-        if not form.is_valid():
-            raise HttpError(
-                400,
-                " ".join(
-                    f"{form.fields[name].label if name in form.fields else 'Registro'}: {message}"
-                    for name, errors in form.errors.items()
-                    for message in errors
-                ),
-            )
-        if key == "users" and instance and instance.pk == request.user.pk:
-            data = form.cleaned_data
-            if not data.get("active") or data.get("role") != "admin":
-                raise HttpError(409, "Você não pode desativar ou remover o próprio perfil de administrador.")
-            if request.user.is_superuser and not data.get("is_superuser"):
-                raise HttpError(409, "Você não pode remover o próprio acesso de superusuário.")
-        try:
-            with transaction.atomic():
-                obj = form.save()
-                audit(
-                    request.user,
-                    f"admin.{key}.{'updated' if instance else 'created'}",
-                    obj,
-                    fields=sorted(name for name in form.changed_data if name != "password"),
-                )
-                if key == "users" and form.cleaned_data.get("password"):
-                    audit(request.user, "admin.users.password_changed", obj)
-        except IntegrityError as error:
-            raise HttpError(409, "Já existe um registro com esses dados.") from error
+        form = validated_form(request, key, payload, instance)
+        obj = persist_form(request, key, instance, form)
         return record_data(key, obj, request)
 
     @http_post("/{resource}", response={201: AdminRecord})

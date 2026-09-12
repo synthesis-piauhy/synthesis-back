@@ -1,5 +1,7 @@
+from datetime import date
 from uuid import UUID
 
+from django.db import connection
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from ninja import File, Form
@@ -20,6 +22,7 @@ from .models import (
     UserRole,
     WeeklyCycle,
 )
+from .pagination import Page, paginate
 from .permissions import AdminOnly, EditorOnly, EditorOrAdmin, ManagerOnly
 from .schemas import (
     ActivityCreateIn,
@@ -66,6 +69,16 @@ class HealthController:
     def health(self):
         return {"detail": "ok"}
 
+    @http_get("/ready", response={200: MessageOut, 503: MessageOut})
+    def ready(self):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+        except Exception:
+            return Status(503, {"detail": "indisponível"})
+        return Status(200, {"detail": "ok"})
+
 
 @api_controller("/me", tags=["authentication"])
 class AuthenticatedUserController:
@@ -83,16 +96,19 @@ class AreaController:
 
 @api_controller("/users", tags=["users"])
 class UserController:
-    @http_get("", response=list[UserOut])
-    def list_users(self):
-        return [user_data(user) for user in User.objects.select_related("area").all()]
+    @http_get("", response=Page[UserOut])
+    def list_users(self, request, page: int = 1, pageSize: int = 25):
+        users = User.objects.select_related("area")
+        if request.user.role == UserRole.MANAGER:
+            users = users.filter(pk=request.user.pk)
+        return paginate(users, user_data, page, pageSize)
 
 
 @api_controller("/cycles", tags=["cycles"])
 class CycleController:
-    @http_get("", response=list[WeeklyCycleOut])
-    def list_cycles(self):
-        return [cycle_data(cycle) for cycle in WeeklyCycle.objects.all()]
+    @http_get("", response=Page[WeeklyCycleOut])
+    def list_cycles(self, page: int = 1, pageSize: int = 25):
+        return paginate(WeeklyCycle.objects.all(), cycle_data, page, pageSize)
 
     @http_post("/{cycle_id}/reopen", response=WeeklyCycleOut, permissions=[AdminOnly()])
     def reopen(self, request, cycle_id: UUID, payload: ReopenCollectionIn):
@@ -111,13 +127,18 @@ class CycleController:
 
 @api_controller("/activity-reports", tags=["activity reports"])
 class ActivityReportController:
-    @http_get("", response=list[ActivityReportOut])
+    @http_get("", response=Page[ActivityReportOut])
     def list_reports(
         self,
         request,
         area: str | None = None,
         managerId: UUID | None = None,
         cycleId: UUID | None = None,
+        page: int = 1,
+        pageSize: int = 25,
+        q: str = "",
+        startDate: date | None = None,
+        endDate: date | None = None,
     ):
         queryset = activity_queryset()
         if request.user.role == UserRole.MANAGER:
@@ -128,7 +149,20 @@ class ActivityReportController:
             queryset = queryset.filter(manager_id=managerId)
         if cycleId:
             queryset = queryset.filter(cycle_id=cycleId)
-        return [activity_data(activity, request) for activity in queryset]
+        if len(q) > 200:
+            raise HttpError(400, "A busca deve ter no máximo 200 caracteres.")
+        if q.strip():
+            queryset = queryset.filter(
+                Q(title__icontains=q.strip())
+                | Q(location__icontains=q.strip())
+                | Q(summary__icontains=q.strip())
+                | Q(result__icontains=q.strip())
+            )
+        if startDate:
+            queryset = queryset.filter(date__gte=startDate)
+        if endDate:
+            queryset = queryset.filter(date__lte=endDate)
+        return paginate(queryset, lambda item: activity_data(item, request), page, pageSize)
 
     @http_get("/{report_id}", response=ActivityReportOut)
     def get_report(self, request, report_id: UUID):
@@ -218,9 +252,12 @@ class CollectionController:
 
 @api_controller("/weekly-reports", tags=["weekly reports"], permissions=[EditorOnly()])
 class WeeklyReportController:
-    @http_get("", response=list[WeeklyReportOut])
-    def list_reports(self, request):
-        return [report_data(report, request) for report in report_queryset()]
+    @http_get("", response=Page[WeeklyReportOut])
+    def list_reports(self, request, page: int = 1, pageSize: int = 25, cycleId: UUID | None = None):
+        reports = report_queryset()
+        if cycleId:
+            reports = reports.filter(cycle_id=cycleId)
+        return paginate(reports, lambda item: report_data(item, request, summary=True), page, pageSize)
 
     @http_post("/draft", response={201: WeeklyReportOut})
     def create_draft(self, request, payload: GenerateDraftIn):
@@ -281,10 +318,10 @@ class WeeklyReportController:
             raise_domain_error(error)
         return report_data(report, request)
 
-    @http_get("/{report_id}/versions", response=list[ReportVersionOut])
-    def list_versions(self, request, report_id: UUID):
+    @http_get("/{report_id}/versions", response=Page[ReportVersionOut])
+    def list_versions(self, request, report_id: UUID, page: int = 1, pageSize: int = 25):
         versions = ReportVersion.objects.filter(weekly_report_id=report_id).select_related("generated_by")
-        return [version_data(version, request) for version in versions]
+        return paginate(versions, lambda item: version_data(item, request), page, pageSize)
 
     @http_post("/{report_id}/versions", response={201: ReportVersionOut})
     def generate_version(self, request, report_id: UUID):
@@ -297,4 +334,4 @@ class WeeklyReportController:
     @http_get("/versions/{version_id}/url", response=str)
     def version_url(self, request, version_id: UUID):
         version = get_object_or_404(ReportVersion, pk=version_id)
-        return request.build_absolute_uri(version.pdf.url)
+        return request.build_absolute_uri(f"/api/files/versions/{version.id}")

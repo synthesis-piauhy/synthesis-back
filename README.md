@@ -15,7 +15,7 @@ alterar os relatos originais e mantém cada PDF gerado como uma versão imutáve
 
 ```bash
 cp .env.example .env
-# Preencha SECRET_KEY, JWT_SIGNING_KEY e as variáveis POSTGRES_* no arquivo .env.
+# Preencha SECRET_KEY e, se usar PostgreSQL, DATABASE_URL/POSTGRES_* no arquivo .env.
 # Defina também DATABASE_URL com os mesmos dados do PostgreSQL.
 docker compose up -d postgres
 uv sync
@@ -38,11 +38,14 @@ em [`docs/database.md`](docs/database.md).
 
 ## Autenticação
 
-A API usa JWT no cabeçalho `Authorization: Bearer <access>`.
+A aplicação web usa sessões Django armazenadas no servidor. O navegador recebe somente o cookie
+`HttpOnly`; operações mutáveis também exigem o token CSRF. Em produção, ambos os cookies são `Secure`.
 
-- `POST /api/token/pair` — recebe `email` e `password` e devolve access/refresh tokens.
-- `POST /api/token/refresh` — renova e rotaciona o refresh token.
-- `POST /api/token/verify` — verifica um token.
+- `GET /api/token/csrf` — inicializa o cookie CSRF.
+- `POST /api/token/pair` — autentica `email` e `password` e cria a sessão.
+- `POST /api/token/refresh` e `POST /api/token/verify` — validam e renovam a sessão compatível com o frontend.
+- `POST /api/token/logout` — encerra a sessão atual.
+- `POST /api/token/logout-all` — revoga todas as sessões do usuário.
 - `GET /api/me` — devolve o usuário autenticado.
 
 Usuários, áreas, ciclos e grupos podem ser administrados pela interface em `/administracao`. Os papéis são `gestor`, `gerente` e `admin`.
@@ -67,8 +70,9 @@ Usuários, áreas, ciclos e grupos podem ser administrados pela interface em `/a
 - `GET /api/weekly-reports/versions/{version_id}/url`
 
 O cadastro de relato usa `multipart/form-data`. Os campos de `ActivityCreateIn` são enviados como campos de
-formulário e as imagens no campo repetível `photos`; a primeira imagem é a principal. A API aceita JPEG, PNG
-e WebP com até 5 MB por arquivo.
+formulário e as imagens no campo repetível `photos`; a primeira imagem é a principal. A API aceita até dez
+JPEG, PNG ou WebP, com no máximo 5 MB por arquivo e 25 MB no lote. Os bytes são decodificados, validados e
+reencodados sem metadados antes do armazenamento.
 
 ## Regras protegidas pelo backend
 
@@ -96,8 +100,13 @@ introdução posterior de Celery/Redis sem alterar o contrato HTTP.
 
 ## Armazenamento
 
-Arquivos ficam em `media/` durante o desenvolvimento. Quando `AWS_STORAGE_BUCKET_NAME` estiver definido, o
-backend utiliza o storage S3 do `django-storages`; `AWS_S3_ENDPOINT_URL` permite serviços compatíveis com S3.
+Arquivos ficam em `media/` durante o desenvolvimento, mas não são publicados por `/media/`. Fotos e PDFs
+são entregues somente pelos endpoints autenticados da API, depois da verificação de papel e propriedade.
+Quando `AWS_STORAGE_BUCKET_NAME` estiver definido, o backend pode usar storage S3 privado via
+`django-storages`; `AWS_S3_ENDPOINT_URL` permite serviços compatíveis com S3.
+
+As listas de usuários, ciclos, relatos e relatórios são paginadas e aceitam `page` e `pageSize` (máximo 100).
+Consulte [`deploy/README.md`](deploy/README.md) para a topologia Linux/Nginx de produção assumida.
 
 ## Administração pelo frontend
 

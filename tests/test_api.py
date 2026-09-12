@@ -14,7 +14,7 @@ def authenticated_client(user, password="senha-forte-123"):
         content_type="application/json",
     )
     assert login.status_code == 200
-    return client, {"HTTP_AUTHORIZATION": f"Bearer {login.json()['access']}"}
+    return client, {"HTTP_X_CSRFTOKEN": login.json()["csrfToken"]}
 
 
 @pytest.mark.django_db
@@ -83,3 +83,13 @@ def test_openapi_schema_is_available():
     paths = response.json()["paths"]
     assert "/api/activity-reports" in paths
     assert "/api/weekly-reports/draft" in paths
+
+
+@pytest.mark.django_db
+def test_paginated_lists_are_bounded(manager):
+    client, headers = authenticated_client(manager)
+    response = client.get("/api/cycles?page=1&pageSize=1", **headers)
+    assert response.status_code == 200
+    assert set(response.json()) == {"items", "total", "page", "pageSize"}
+    assert response.json()["pageSize"] == 1
+    assert client.get("/api/cycles?pageSize=101", **headers).status_code == 400

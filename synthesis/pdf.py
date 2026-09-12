@@ -1,3 +1,4 @@
+import logging
 from html import escape
 from io import BytesIO
 
@@ -10,6 +11,8 @@ from reportlab.platypus import Image, KeepTogether, PageBreak, Paragraph, Simple
 
 from .models import WeeklyReport
 
+logger = logging.getLogger(__name__)
+
 
 def report_photo(card):
     """Return a proportionally sized image, without failing the whole PDF on a bad file."""
@@ -20,7 +23,8 @@ def report_photo(card):
         max_width, max_height = 174 * mm, 76 * mm
         scale = min(max_width / width, max_height / height)
         return Image(image_data, width=width * scale, height=height * scale)
-    except Exception:
+    except (OSError, ValueError) as exc:
+        logger.warning("pdf_photo_unavailable", extra={"card_id": str(card.pk), "error": str(exc)})
         return None
 
 

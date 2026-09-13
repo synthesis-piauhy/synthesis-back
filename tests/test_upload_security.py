@@ -16,12 +16,16 @@ from .test_api import authenticated_client
 
 def payload(cycle):
     return dict(
+        templateKey="acao_evento",
         title="Oficina comunitária",
         date=cycle.starts_at,
         location="Centro",
         summary="Descrição da oficina comunitária.",
         result="Resultado da oficina comunitária.",
         beneficiaries="24 participantes",
+        evidence="",
+        nextStep="",
+        internalNotes="",
         cycleId=cycle.id,
     )
 

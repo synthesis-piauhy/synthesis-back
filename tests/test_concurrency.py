@@ -112,12 +112,16 @@ def test_concurrent_reorders_leave_one_complete_order_on_postgres(activity, mana
     second = create_activity(
         actor=manager,
         data={
+            "templateKey": "acao_evento",
             "title": "Segunda atividade",
             "date": activity.date,
             "location": "Centro",
             "summary": "Segunda atividade usada para validar a ordenação concorrente.",
             "result": "A ordenação final permanece completa e consistente.",
             "beneficiaries": "Participantes",
+            "evidence": "",
+            "nextStep": "",
+            "internalNotes": "",
             "cycleId": activity.cycle_id,
         },
         photos=[image_upload()],

@@ -37,6 +37,18 @@ def test_reopened_cycle_requires_reason(cycle):
     )
 
 
+def test_only_one_cycle_can_be_active(cycle):
+    raises_integrity_error(
+        lambda: WeeklyCycle.objects.create(
+            label="Ciclo concorrente",
+            starts_at=cycle.starts_at,
+            ends_at=cycle.ends_at,
+            deadline=cycle.deadline,
+            status="aberta",
+        )
+    )
+
+
 def test_essential_activity_and_card_text_cannot_be_empty(activity, editor):
     raises_integrity_error(lambda: type(activity).objects.filter(pk=activity.pk).update(title=""))
     report = generate_draft(actor=editor, cycle_id=activity.cycle_id, activity_ids=[activity.pk])

@@ -184,6 +184,9 @@ def test_cycle_create_close_reopen_and_protect_activity_dates(admin_user, activi
         "status": "aberta",
         "reopen_reason": "",
     }
+    assert call(admin_user, "post", "cycles", values).status_code == 400
+    cycle.status = "encerrada"
+    cycle.save(update_fields=("status", "updated_at"))
     response = call(admin_user, "post", "cycles", values)
     assert response.status_code == 201, response.content
     new_id = response.json()["id"]

@@ -5,6 +5,8 @@ from uuid import UUID
 from ninja import Schema
 from pydantic import Field
 
+from .activity_templates import PUBLISHABLE_LIMITS
+
 
 class MessageOut(Schema):
     detail: str
@@ -28,6 +30,17 @@ class WeeklyCycleOut(Schema):
     status: str
 
 
+class WeeklyCycleCreateIn(Schema):
+    label: str = Field(min_length=3, max_length=120)
+    startsAt: Date
+    endsAt: Date
+    deadline: DateTime
+
+
+class CycleDeadlineUpdateIn(Schema):
+    deadline: DateTime
+
+
 class ActivityPhotoOut(Schema):
     id: UUID
     url: str
@@ -38,12 +51,17 @@ class ActivityPhotoOut(Schema):
 
 class ActivityReportOut(Schema):
     id: UUID
+    templateKey: str
+    templateVersion: int
     title: str
     date: Date
     location: str
     summary: str
     result: str
     beneficiaries: str
+    evidence: str
+    nextStep: str
+    internalNotes: str
     area: str
     managerId: UUID
     cycleId: UUID
@@ -53,22 +71,33 @@ class ActivityReportOut(Schema):
 
 
 class ActivityCreateIn(Schema):
-    title: str = Field(min_length=3, max_length=200)
+    templateKey: str = Field(min_length=1, max_length=32)
+    title: str = Field(min_length=3, max_length=PUBLISHABLE_LIMITS["title"])
     date: Date
     location: str = Field(min_length=2, max_length=200)
-    summary: str = Field(min_length=10, max_length=10000)
-    result: str = Field(min_length=10, max_length=10000)
-    beneficiaries: str = Field(min_length=2, max_length=240)
+    summary: str = Field(min_length=10, max_length=PUBLISHABLE_LIMITS["summary"])
+    result: str = Field(min_length=10, max_length=PUBLISHABLE_LIMITS["result"])
+    beneficiaries: str = Field(min_length=2, max_length=PUBLISHABLE_LIMITS["beneficiaries"])
+    evidence: str = Field(default="", max_length=PUBLISHABLE_LIMITS["evidence"])
+    nextStep: str = Field(default="", max_length=PUBLISHABLE_LIMITS["nextStep"])
+    internalNotes: str = Field(default="", max_length=PUBLISHABLE_LIMITS["internalNotes"])
     cycleId: UUID
 
 
 class ActivityUpdateIn(Schema):
-    title: str | None = Field(default=None, min_length=3, max_length=200)
+    title: str | None = Field(default=None, min_length=3, max_length=PUBLISHABLE_LIMITS["title"])
     date: Date | None = None
     location: str | None = Field(default=None, min_length=2, max_length=200)
-    summary: str | None = Field(default=None, min_length=10, max_length=10000)
-    result: str | None = Field(default=None, min_length=10, max_length=10000)
-    beneficiaries: str | None = Field(default=None, min_length=2, max_length=240)
+    summary: str | None = Field(default=None, min_length=10, max_length=PUBLISHABLE_LIMITS["summary"])
+    result: str | None = Field(default=None, min_length=10, max_length=PUBLISHABLE_LIMITS["result"])
+    beneficiaries: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=PUBLISHABLE_LIMITS["beneficiaries"],
+    )
+    evidence: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["evidence"])
+    nextStep: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["nextStep"])
+    internalNotes: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["internalNotes"])
 
 
 class ReportCardOut(Schema):
@@ -77,9 +106,19 @@ class ReportCardOut(Schema):
     editorialTitle: str
     editorialSummary: str
     editorialResult: str
+    editorialEvidence: str
+    editorialNextStep: str
+    executiveClassification: str
+    needsDecision: bool
+    decisionRequest: str
+    nextStepOwner: str
+    nextStepDueDate: Date | None
     selectedPhotoId: UUID
     area: str
     originalDate: Date
+    originalLocation: str
+    originalBeneficiaries: str
+    originalManagerName: str
     order: int
     removed: bool
 
@@ -88,6 +127,7 @@ class ReportSectionOut(Schema):
     id: UUID
     area: str
     title: str
+    executiveSummary: str
     order: int
     cards: list[ReportCardOut]
 
@@ -104,6 +144,7 @@ class WeeklyReportOut(Schema):
     id: UUID
     cycleId: UUID
     status: str
+    executiveSummary: str
     selectedActivityIds: list[UUID]
     sections: list[ReportSectionOut]
     versions: list[ReportVersionOut]
@@ -129,10 +170,25 @@ class GenerateDraftIn(Schema):
 
 
 class ReportCardUpdateIn(Schema):
-    editorialTitle: str | None = Field(default=None, max_length=200)
-    editorialSummary: str | None = Field(default=None, max_length=10000)
-    editorialResult: str | None = Field(default=None, max_length=10000)
+    editorialTitle: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["title"])
+    editorialSummary: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["summary"])
+    editorialResult: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["result"])
+    editorialEvidence: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["evidence"])
+    editorialNextStep: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["nextStep"])
+    executiveClassification: str | None = Field(default=None, max_length=16)
+    needsDecision: bool | None = None
+    decisionRequest: str | None = Field(default=None, max_length=180)
+    nextStepOwner: str | None = Field(default=None, max_length=120)
+    nextStepDueDate: Date | None = None
     selectedPhotoId: UUID | None = None
+
+
+class WeeklyReportUpdateIn(Schema):
+    executiveSummary: str = Field(max_length=400)
+
+
+class ReportSectionUpdateIn(Schema):
+    executiveSummary: str = Field(max_length=180)
 
 
 class ReorderCardsIn(Schema):

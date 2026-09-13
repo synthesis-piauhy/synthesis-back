@@ -30,11 +30,11 @@ erDiagram
 | `synthesis_area` | Áreas organizacionais | Nome único sem diferenciar maiúsculas e minúsculas |
 | `synthesis_user` | Identidade, perfil e área | E-mail único sem diferenciar caixa; gestor exige área |
 | `synthesis_weeklycycle` | Janela semanal de coleta | Datas válidas; status controlado; reabertura exige motivo |
-| `synthesis_activityreport` | Relato original do gestor | Conteúdo essencial obrigatório; autoria, área e ciclo protegidos |
+| `synthesis_activityreport` | Relato original do gestor | Modelo versionado; conteúdo publicável curto e notas internas separadas |
 | `synthesis_activityphoto` | Evidências fotográficas | No máximo uma foto principal por relato |
-| `synthesis_weeklyreport` | Mosaico consolidado do ciclo | No máximo um mosaico por ciclo |
-| `synthesis_reportsection` | Agrupamento do mosaico por área | Uma seção por área em cada mosaico |
-| `synthesis_reportcard` | Snapshot editorial de um relato | Um relato por seção; remoção lógica preserva o original |
+| `synthesis_weeklyreport` | Relatório consolidado e briefing executivo do ciclo | No máximo um relatório por ciclo |
+| `synthesis_reportsection` | Agrupamento do relatório por área | Uma seção por área, com síntese curta opcional |
+| `synthesis_reportcard` | Snapshot editorial e classificação executiva de um relato | Um relato por seção; remoção lógica preserva o original |
 | `synthesis_reportversion` | PDF imutável do mosaico | Versão positiva e única dentro do mosaico |
 | `synthesis_auditevent` | Trilha de operações críticas | Ator pode ser removido sem apagar o evento |
 
@@ -46,9 +46,15 @@ O banco garante regras locais por `CHECK`, `UNIQUE`, chaves estrangeiras e índi
 
 - gestor, área e ciclo do relato devem ser compatíveis;
 - a data da atividade precisa pertencer ao intervalo do ciclo;
+- apenas um ciclo pode permanecer operacionalmente ativo; criação, encerramento, prazo e reabertura passam por serviços auditados;
 - a foto escolhida pelo card precisa pertencer ao relato original;
 - relatos selecionados precisam pertencer ao ciclo do mosaico;
 - a seleção editorial não pode mudar depois da criação do mosaico;
+- novos relatos devem usar um dos modelos ativos e respeitar os limites dos campos publicáveis;
+- notas internas ficam apenas no relato e não são copiadas para o snapshot editorial;
+- cards precisam respeitar o orçamento editorial antes da geração de um novo PDF;
+- a síntese semanal é obrigatória para gerar o PDF, com no máximo três destaques e três pontos de atenção;
+- destaques exigem evidência, decisões exigem pedido explícito e próximos passos exigem responsável e prazo;
 - versões são numeradas sob bloqueio transacional do mosaico.
 
 ## Política de exclusão

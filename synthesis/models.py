@@ -6,6 +6,7 @@ from django.db import models
 from django.db.models import Q
 from django.db.models.functions import Lower
 
+from .activity_templates import ACTIVITY_TEMPLATE_CHOICES, LEGACY_TEMPLATE
 from .managers import UserManager
 from .validators import normalize_image, validate_image_content_type, validate_image_size
 
@@ -128,10 +129,26 @@ class WeeklyCycle(TimestampedModel):
                 condition=~Q(status=CollectionStatus.REOPENED) | ~Q(reopen_reason=""),
                 name="reopened_cycle_has_reason",
             ),
+            models.UniqueConstraint(
+                models.Value(1),
+                condition=Q(status__in=(CollectionStatus.OPEN, CollectionStatus.REOPENED)),
+                name="one_active_weekly_cycle",
+            ),
         ]
         indexes = [
             models.Index(fields=("status", "-starts_at"), name="cycle_status_start_idx"),
         ]
+
+    def clean(self):
+        super().clean()
+        if self.status in {CollectionStatus.OPEN, CollectionStatus.REOPENED}:
+            another_active = (
+                type(self).objects.filter(status__in=(CollectionStatus.OPEN, CollectionStatus.REOPENED))
+                .exclude(pk=self.pk)
+                .exists()
+            )
+            if another_active:
+                raise ValidationError({"status": "Já existe um ciclo ativo. Encerre-o antes de abrir outro."})
 
     @property
     def accepts_reports(self) -> bool:
@@ -142,12 +159,21 @@ class WeeklyCycle(TimestampedModel):
 
 
 class ActivityReport(TimestampedModel):
+    template_key = models.CharField(
+        max_length=32,
+        choices=ACTIVITY_TEMPLATE_CHOICES,
+        default=LEGACY_TEMPLATE,
+    )
+    template_version = models.PositiveSmallIntegerField(default=1, editable=False)
     title = models.CharField(max_length=200)
     date = models.DateField()
     location = models.CharField(max_length=200)
     summary = models.TextField()
     result = models.TextField()
     beneficiaries = models.CharField(max_length=240)
+    evidence = models.CharField(max_length=100, blank=True)
+    next_step = models.CharField(max_length=140, blank=True)
+    internal_notes = models.TextField(blank=True)
     area = models.ForeignKey(Area, on_delete=models.PROTECT, related_name="activity_reports")
     manager = models.ForeignKey(User, on_delete=models.PROTECT, related_name="activity_reports")
     cycle = models.ForeignKey(WeeklyCycle, on_delete=models.PROTECT, related_name="activity_reports")
@@ -162,6 +188,10 @@ class ActivityReport(TimestampedModel):
             models.CheckConstraint(
                 condition=~Q(beneficiaries=""),
                 name="activity_beneficiaries_not_empty",
+            ),
+            models.CheckConstraint(
+                condition=Q(template_version__gte=1),
+                name="activity_template_version_positive",
             ),
         ]
         indexes = [
@@ -238,10 +268,17 @@ class ReportStatus(models.TextChoices):
     PDF_GENERATED = "pdf_gerado", "PDF gerado"
 
 
+class ExecutiveClassification(models.TextChoices):
+    STANDARD = "informativo", "Informativo"
+    HIGHLIGHT = "destaque", "Destaque"
+    ATTENTION = "atencao", "Ponto de atenção"
+
+
 class WeeklyReport(TimestampedModel):
     cycle = models.OneToOneField(WeeklyCycle, on_delete=models.PROTECT, related_name="weekly_report")
     status = models.CharField(max_length=20, choices=ReportStatus.choices, default=ReportStatus.DRAFT)
     content_version = models.PositiveIntegerField(default=0, editable=False)
+    executive_summary = models.TextField(blank=True)
     selected_activities = models.ManyToManyField(ActivityReport, related_name="weekly_reports", blank=True)
 
     class Meta:
@@ -258,6 +295,7 @@ class ReportSection(TimestampedModel):
     weekly_report = models.ForeignKey(WeeklyReport, on_delete=models.CASCADE, related_name="sections")
     area = models.ForeignKey(Area, on_delete=models.PROTECT, related_name="report_sections")
     title = models.CharField(max_length=120)
+    executive_summary = models.CharField(max_length=180, blank=True)
     order = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
@@ -279,6 +317,17 @@ class ReportCard(TimestampedModel):
     editorial_title = models.CharField(max_length=200)
     editorial_summary = models.TextField()
     editorial_result = models.TextField()
+    editorial_evidence = models.CharField(max_length=100, blank=True)
+    editorial_next_step = models.CharField(max_length=140, blank=True)
+    executive_classification = models.CharField(
+        max_length=16,
+        choices=ExecutiveClassification.choices,
+        default=ExecutiveClassification.STANDARD,
+    )
+    needs_decision = models.BooleanField(default=False)
+    decision_request = models.CharField(max_length=180, blank=True)
+    next_step_owner = models.CharField(max_length=120, blank=True)
+    next_step_due_date = models.DateField(null=True, blank=True)
     selected_photo = models.ForeignKey(ActivityPhoto, on_delete=models.PROTECT, related_name="report_cards")
     area = models.ForeignKey(Area, on_delete=models.PROTECT, related_name="report_cards")
     original_date = models.DateField()
@@ -295,6 +344,10 @@ class ReportCard(TimestampedModel):
             models.CheckConstraint(condition=~Q(editorial_title=""), name="card_title_not_empty"),
             models.CheckConstraint(condition=~Q(editorial_summary=""), name="card_summary_not_empty"),
             models.CheckConstraint(condition=~Q(editorial_result=""), name="card_result_not_empty"),
+            models.CheckConstraint(
+                condition=Q(executive_classification__in=ExecutiveClassification.values),
+                name="card_executive_classification_valid",
+            ),
         ]
         indexes = [
             models.Index(fields=("section", "removed", "order"), name="card_section_state_order_idx"),

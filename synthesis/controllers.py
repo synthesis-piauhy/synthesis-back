@@ -21,37 +21,50 @@ from .models import (
     User,
     UserRole,
     WeeklyCycle,
+    WeeklyReport,
 )
 from .pagination import Page, paginate
-from .permissions import AdminOnly, EditorOnly, EditorOrAdmin, ManagerOnly
+from .permissions import EditorOnly, EditorOrAdmin, ManagerOnly
 from .schemas import (
     ActivityCreateIn,
     ActivityReportOut,
     ActivityUpdateIn,
     CollectionOverviewOut,
+    CycleDeadlineUpdateIn,
     GenerateDraftIn,
     MessageOut,
     ReopenCollectionIn,
     ReorderCardsIn,
     ReportCardOut,
     ReportCardUpdateIn,
+    ReportSectionUpdateIn,
     ReportVersionOut,
     UserOut,
+    WeeklyCycleCreateIn,
     WeeklyCycleOut,
     WeeklyReportOut,
+    WeeklyReportUpdateIn,
 )
 from .serializers import activity_data, card_data, cycle_data, report_data, user_data, version_data
 from .services import (
     DomainError,
+    cancel_report_draft,
+    close_cycle,
     create_activity,
+    create_cycle,
     generate_draft,
     generate_pdf_version,
     remove_card,
     reopen_cycle,
+    reopen_report_selection,
     reorder_cards,
     report_queryset,
+    restore_card,
     update_card,
+    update_cycle_deadline,
     update_own_activity,
+    update_report,
+    update_section,
 )
 
 
@@ -110,7 +123,39 @@ class CycleController:
     def list_cycles(self, page: int = 1, pageSize: int = 25):
         return paginate(WeeklyCycle.objects.all(), cycle_data, page, pageSize)
 
-    @http_post("/{cycle_id}/reopen", response=WeeklyCycleOut, permissions=[AdminOnly()])
+    @http_post("", response={201: WeeklyCycleOut}, permissions=[EditorOrAdmin()])
+    def create(self, request, payload: WeeklyCycleCreateIn):
+        try:
+            cycle = create_cycle(
+                actor=request.user,
+                label=payload.label,
+                starts_at=payload.startsAt,
+                ends_at=payload.endsAt,
+                deadline=payload.deadline,
+            )
+        except DomainError as error:
+            raise_domain_error(error)
+        return Status(201, cycle_data(cycle))
+
+    @http_post("/{cycle_id}/close", response=WeeklyCycleOut, permissions=[EditorOrAdmin()])
+    def close(self, request, cycle_id: UUID):
+        cycle = get_object_or_404(WeeklyCycle, pk=cycle_id)
+        try:
+            cycle = close_cycle(actor=request.user, cycle=cycle)
+        except DomainError as error:
+            raise_domain_error(error)
+        return cycle_data(cycle)
+
+    @http_patch("/{cycle_id}/deadline", response=WeeklyCycleOut, permissions=[EditorOrAdmin()])
+    def deadline(self, request, cycle_id: UUID, payload: CycleDeadlineUpdateIn):
+        cycle = get_object_or_404(WeeklyCycle, pk=cycle_id)
+        try:
+            cycle = update_cycle_deadline(actor=request.user, cycle=cycle, deadline=payload.deadline)
+        except DomainError as error:
+            raise_domain_error(error)
+        return cycle_data(cycle)
+
+    @http_post("/{cycle_id}/reopen", response=WeeklyCycleOut, permissions=[EditorOrAdmin()])
     def reopen(self, request, cycle_id: UUID, payload: ReopenCollectionIn):
         cycle = get_object_or_404(WeeklyCycle, pk=cycle_id)
         try:
@@ -275,6 +320,37 @@ class WeeklyReportController:
     def get_report(self, request, report_id: UUID):
         return report_data(get_object_or_404(report_queryset(), pk=report_id), request)
 
+    @http_patch("/{report_id}", response=WeeklyReportOut)
+    def patch_report(self, request, report_id: UUID, payload: WeeklyReportUpdateIn):
+        report = get_object_or_404(WeeklyReport, pk=report_id)
+        try:
+            report = update_report(
+                actor=request.user,
+                report=report,
+                executive_summary=payload.executiveSummary,
+            )
+        except DomainError as error:
+            raise_domain_error(error)
+        return report_data(report, request)
+
+    @http_post("/{report_id}/selection/reopen", response=WeeklyReportOut)
+    def reopen_selection(self, request, report_id: UUID):
+        report = get_object_or_404(WeeklyReport, pk=report_id)
+        try:
+            report = reopen_report_selection(actor=request.user, report=report)
+        except DomainError as error:
+            raise_domain_error(error)
+        return report_data(report, request)
+
+    @http_delete("/{report_id}", response=MessageOut)
+    def cancel_draft(self, request, report_id: UUID):
+        report = get_object_or_404(WeeklyReport, pk=report_id)
+        try:
+            cancel_report_draft(actor=request.user, report=report)
+        except DomainError as error:
+            raise_domain_error(error)
+        return {"detail": "Rascunho cancelado."}
+
     @http_patch("/{report_id}/cards/{card_id}", response=ReportCardOut)
     def patch_card(self, request, report_id: UUID, card_id: UUID, payload: ReportCardUpdateIn):
         card = get_object_or_404(
@@ -286,11 +362,34 @@ class WeeklyReportController:
             card = update_card(
                 actor=request.user,
                 card=card,
-                changes=payload.model_dump(exclude_none=True),
+                changes=payload.model_dump(exclude_unset=True),
             )
         except DomainError as error:
             raise_domain_error(error)
         return card_data(card)
+
+    @http_patch("/{report_id}/sections/{section_id}", response=WeeklyReportOut)
+    def patch_section(
+        self,
+        request,
+        report_id: UUID,
+        section_id: UUID,
+        payload: ReportSectionUpdateIn,
+    ):
+        section = get_object_or_404(
+            ReportSection.objects.select_related("weekly_report"),
+            pk=section_id,
+            weekly_report_id=report_id,
+        )
+        try:
+            report = update_section(
+                actor=request.user,
+                section=section,
+                executive_summary=payload.executiveSummary,
+            )
+        except DomainError as error:
+            raise_domain_error(error)
+        return report_data(report, request)
 
     @http_post("/{report_id}/sections/{section_id}/reorder", response=WeeklyReportOut)
     def reorder(self, request, report_id: UUID, section_id: UUID, payload: ReorderCardsIn):
@@ -314,6 +413,19 @@ class WeeklyReportController:
         )
         try:
             report = remove_card(actor=request.user, card=card)
+        except DomainError as error:
+            raise_domain_error(error)
+        return report_data(report, request)
+
+    @http_post("/{report_id}/cards/{card_id}/restore", response=WeeklyReportOut)
+    def restore_removed_card(self, request, report_id: UUID, card_id: UUID):
+        card = get_object_or_404(
+            ReportCard.objects.select_related("section__weekly_report"),
+            pk=card_id,
+            section__weekly_report_id=report_id,
+        )
+        try:
+            report = restore_card(actor=request.user, card=card)
         except DomainError as error:
             raise_domain_error(error)
         return report_data(report, request)

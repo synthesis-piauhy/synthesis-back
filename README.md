@@ -55,6 +55,9 @@ Usuários, áreas, ciclos e grupos podem ser administrados pela interface em `/a
 - `GET /api/areas`
 - `GET /api/users`
 - `GET /api/cycles`
+- `POST /api/cycles`
+- `POST /api/cycles/{id}/close`
+- `PATCH /api/cycles/{id}/deadline`
 - `POST /api/cycles/{id}/reopen`
 - `GET|POST /api/activity-reports`
 - `GET|PATCH /api/activity-reports/{id}`
@@ -62,9 +65,10 @@ Usuários, áreas, ciclos e grupos podem ser administrados pela interface em `/a
 - `GET /api/collection/pending-managers`
 - `GET /api/weekly-reports`
 - `POST /api/weekly-reports/draft`
-- `GET /api/weekly-reports/{id}`
+- `GET|PATCH /api/weekly-reports/{id}`
 - `PATCH /api/weekly-reports/{id}/cards/{card_id}`
 - `DELETE /api/weekly-reports/{id}/cards/{card_id}`
+- `PATCH /api/weekly-reports/{id}/sections/{section_id}`
 - `POST /api/weekly-reports/{id}/sections/{section_id}/reorder`
 - `GET|POST /api/weekly-reports/{id}/versions`
 - `GET /api/weekly-reports/versions/{version_id}/url`
@@ -74,15 +78,28 @@ formulário e as imagens no campo repetível `photos`; a primeira imagem é a pr
 JPEG, PNG ou WebP, com no máximo 5 MB por arquivo e 25 MB no lote. Os bytes são decodificados, validados e
 reencodados sem metadados antes do armazenamento.
 
+Cada novo relato usa um dos modelos versionados `acao_evento`, `entrega_marco` ou
+`atendimento_articulacao`. Os campos publicados têm orçamento compatível com o card final: título com 80,
+descrição com 240, resultado com 180, público com 80, evidência com 100 e próximo passo com 140 caracteres.
+`internalNotes` aceita até 2.000 caracteres para contexto de consulta e nunca é copiado para o card editorial.
+Registros anteriores à migration `0005_activity_templates` permanecem identificados como `legado`.
+
 ## Regras protegidas pelo backend
 
 - O gestor só cria relatos em sua própria área e só edita os próprios relatos.
+- A gerente abre, encerra, reabre e ajusta o prazo dos ciclos pela API operacional; essas ações são auditadas.
+- Apenas um ciclo pode permanecer aberto ou reaberto por vez.
 - Relatos só podem ser criados ou editados enquanto o ciclo está aberto ou reaberto.
 - Existe no máximo um relatório editorial por ciclo semanal.
 - Depois da geração do rascunho, a seleção de relatos fica fechada.
 - Um `ReportCard` é um snapshot editorial; sua edição nunca altera o `ActivityReport` original.
+- Notas complementares permanecem no relato original e não são publicadas no PDF.
 - Retirar um card é uma remoção lógica e não exclui o relato.
 - Cada geração cria uma nova versão de PDF; versões anteriores permanecem armazenadas.
+- Um PDF novo só pode ser gerado quando todos os cards respeitam o orçamento editorial.
+- O PDF abre com um briefing executivo: leitura da semana, contadores, até três destaques, até três
+  pontos de atenção e até três prioridades derivadas dos cards.
+- Destaques exigem evidência; decisões exigem um pedido claro; próximos passos exigem responsável e prazo.
 - Operações críticas geram eventos de auditoria.
 
 ## Desenvolvimento

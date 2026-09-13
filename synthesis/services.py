@@ -9,11 +9,19 @@ from django.db import transaction
 from django.db.models import F, Max
 from django.utils import timezone
 
+from .activity_templates import (
+    ACTIVE_TEMPLATE_KEYS,
+    EDITORIAL_LIMITS,
+    EXECUTIVE_LIMITS,
+    PUBLISHABLE_LIMITS,
+    TEMPLATE_VERSION,
+)
 from .models import (
     ActivityPhoto,
     ActivityReport,
     AuditEvent,
     CollectionStatus,
+    ExecutiveClassification,
     ReportCard,
     ReportSection,
     ReportStatus,
@@ -51,6 +59,10 @@ def _validate_text(data: dict) -> None:
         value = data.get(field)
         if value is not None and len(value.strip()) < minimum:
             raise DomainError(f"O campo {field} precisa ter ao menos {minimum} caracteres.")
+    for field, maximum in PUBLISHABLE_LIMITS.items():
+        value = data.get(field)
+        if value is not None and len(value.strip()) > maximum:
+            raise DomainError(f"O campo {field} deve ter no máximo {maximum} caracteres.")
 
 
 def create_activity(*, actor: User, data: dict, photos: list) -> ActivityReport:
@@ -75,7 +87,18 @@ def _create_activity(*, actor: User, data: dict, photos: list, saved_files: list
         raise DomainError("Uma foto principal é obrigatória.")
     if not actor.area_id:
         raise DomainError("O gestor precisa estar vinculado a uma área.")
+    for field in PUBLISHABLE_LIMITS:
+        if isinstance(data.get(field), str):
+            data[field] = data[field].strip()
     _validate_text(data)
+    template_key = data.pop("templateKey", "")
+    if template_key not in ACTIVE_TEMPLATE_KEYS:
+        raise DomainError("Selecione um modelo de relato válido.")
+    data["template_key"] = template_key
+    data["template_version"] = TEMPLATE_VERSION
+    data["next_step"] = data.pop("nextStep", "").strip()
+    data["internal_notes"] = data.pop("internalNotes", "").strip()
+    data["evidence"] = data.get("evidence", "").strip()
     try:
         cycle = WeeklyCycle.objects.get(pk=data.pop("cycleId"))
     except WeeklyCycle.DoesNotExist as exc:
@@ -109,7 +132,14 @@ def update_own_activity(*, actor: User, report: ActivityReport, changes: dict) -
         raise DomainError("Você só pode editar os próprios relatos.", 403)
     if not report.cycle.accepts_reports:
         raise DomainError("O ciclo está encerrado.", 409)
+    for field in PUBLISHABLE_LIMITS:
+        if isinstance(changes.get(field), str):
+            changes[field] = changes[field].strip()
     _validate_text(changes)
+    if "nextStep" in changes:
+        changes["next_step"] = changes.pop("nextStep").strip()
+    if "internalNotes" in changes:
+        changes["internal_notes"] = changes.pop("internalNotes").strip()
     for field, value in changes.items():
         setattr(report, field, value)
     try:
@@ -121,12 +151,88 @@ def update_own_activity(*, actor: User, report: ActivityReport, changes: dict) -
     return report
 
 
+def _validate_cycle_window(*, starts_at, ends_at, deadline, deadline_within_cycle=True) -> None:
+    if ends_at < starts_at:
+        raise DomainError("O fim do ciclo precisa ser igual ou posterior ao início.")
+    if deadline <= timezone.now():
+        raise DomainError("O prazo de envio precisa estar no futuro.")
+    if deadline_within_cycle and not starts_at <= timezone.localtime(deadline).date() <= ends_at:
+        raise DomainError("O prazo de envio precisa estar dentro do período do ciclo.")
+
+
+@transaction.atomic
+def create_cycle(*, actor: User, label: str, starts_at, ends_at, deadline) -> WeeklyCycle:
+    _validate_cycle_window(starts_at=starts_at, ends_at=ends_at, deadline=deadline)
+    if (
+        WeeklyCycle.objects.select_for_update()
+        .filter(status__in=(CollectionStatus.OPEN, CollectionStatus.REOPENED))
+        .exists()
+    ):
+        raise DomainError("Encerre o ciclo ativo antes de abrir um novo.", 409)
+    cycle = WeeklyCycle(
+        label=label.strip(),
+        starts_at=starts_at,
+        ends_at=ends_at,
+        deadline=deadline,
+        status=CollectionStatus.OPEN,
+    )
+    try:
+        cycle.full_clean()
+    except ValidationError as exc:
+        raise DomainError(" ".join(exc.messages)) from exc
+    cycle.save()
+    audit(actor, "cycle.created", cycle)
+    return cycle
+
+
+@transaction.atomic
+def close_cycle(*, actor: User, cycle: WeeklyCycle) -> WeeklyCycle:
+    cycle = WeeklyCycle.objects.select_for_update().get(pk=cycle.pk)
+    if not cycle.accepts_reports:
+        raise DomainError("Este ciclo já está encerrado.", 409)
+    cycle.status = CollectionStatus.CLOSED
+    cycle.save(update_fields=("status", "updated_at"))
+    audit(actor, "cycle.closed", cycle)
+    return cycle
+
+
+@transaction.atomic
+def update_cycle_deadline(*, actor: User, cycle: WeeklyCycle, deadline) -> WeeklyCycle:
+    cycle = WeeklyCycle.objects.select_for_update().get(pk=cycle.pk)
+    if not cycle.accepts_reports:
+        raise DomainError("Somente ciclos ativos podem ter o prazo ajustado.", 409)
+    _validate_cycle_window(
+        starts_at=cycle.starts_at,
+        ends_at=cycle.ends_at,
+        deadline=deadline,
+        deadline_within_cycle=cycle.status == CollectionStatus.OPEN,
+    )
+    cycle.deadline = deadline
+    cycle.save(update_fields=("deadline", "updated_at"))
+    audit(actor, "cycle.deadline_updated", cycle, deadline=deadline.isoformat())
+    return cycle
+
+
 @transaction.atomic
 def reopen_cycle(*, actor: User, cycle: WeeklyCycle, reason: str, new_deadline) -> WeeklyCycle:
+    cycle = WeeklyCycle.objects.select_for_update().get(pk=cycle.pk)
+    if cycle.status != CollectionStatus.CLOSED:
+        raise DomainError("Somente um ciclo encerrado pode ser reaberto.", 409)
     if len(reason.strip()) < 5:
         raise DomainError("Informe o motivo da reabertura.")
-    if new_deadline <= timezone.now():
-        raise DomainError("O novo prazo precisa estar no futuro.")
+    _validate_cycle_window(
+        starts_at=cycle.starts_at,
+        ends_at=cycle.ends_at,
+        deadline=new_deadline,
+        deadline_within_cycle=False,
+    )
+    if (
+        WeeklyCycle.objects.select_for_update()
+        .filter(status__in=(CollectionStatus.OPEN, CollectionStatus.REOPENED))
+        .exclude(pk=cycle.pk)
+        .exists()
+    ):
+        raise DomainError("Encerre o ciclo ativo antes de reabrir outro.", 409)
     cycle.status = CollectionStatus.REOPENED
     cycle.reopen_reason = reason.strip()
     cycle.deadline = new_deadline
@@ -146,22 +252,11 @@ def report_queryset():
     )
 
 
-@transaction.atomic
-def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> WeeklyReport:
+def _selected_activities(*, cycle: WeeklyCycle, activity_ids: list[UUID]) -> list[ActivityReport]:
     if not activity_ids:
         raise DomainError("Selecione ao menos um relato.")
     if len(set(activity_ids)) != len(activity_ids):
         raise DomainError("A seleção contém relatos duplicados.")
-    try:
-        cycle = WeeklyCycle.objects.select_for_update().get(pk=cycle_id)
-    except WeeklyCycle.DoesNotExist as exc:
-        raise DomainError("Ciclo não encontrado.", 404) from exc
-    existing = report_queryset().filter(cycle=cycle).first()
-    if existing:
-        existing_ids = set(existing.selected_activities.values_list("id", flat=True))
-        if existing_ids != set(activity_ids):
-            raise DomainError("O rascunho deste ciclo já foi criado e sua seleção está fechada.", 409)
-        return existing
     activities = list(
         ActivityReport.objects.filter(pk__in=activity_ids, cycle=cycle)
         .select_related("area")
@@ -170,11 +265,25 @@ def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> 
     )
     if len(activities) != len(activity_ids):
         raise DomainError("Há relatos inexistentes ou pertencentes a outro ciclo.")
-    report = WeeklyReport.objects.create(cycle=cycle, status=ReportStatus.DRAFT)
-    report.selected_activities.set(activities)
+    return activities
+
+
+def _populate_report(report: WeeklyReport, activities: list[ActivityReport], *, replacing=False) -> None:
     by_area = defaultdict(list)
     for activity in activities:
         by_area[activity.area].append(activity)
+    initiative_label = "iniciativa" if len(activities) == 1 else "iniciativas"
+    area_label = "área" if len(by_area) == 1 else "áreas"
+    report.sections.all().delete()
+    report.selected_activities.set(activities)
+    report.status = ReportStatus.DRAFT
+    report.executive_summary = (
+        f"A semana reúne {len(activities)} {initiative_label} de {len(by_area)} {area_label}, "
+        "com foco nos resultados e próximos passos apresentados a seguir."
+    )
+    if replacing:
+        report.content_version += 1
+    report.save(update_fields=("status", "executive_summary", "content_version", "updated_at"))
     for section_order, (area, area_activities) in enumerate(by_area.items()):
         section = ReportSection.objects.create(
             weekly_report=report,
@@ -192,6 +301,8 @@ def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> 
                 editorial_title=activity.title,
                 editorial_summary=activity.summary,
                 editorial_result=activity.result,
+                editorial_evidence=activity.evidence,
+                editorial_next_step=activity.next_step,
                 selected_photo=selected_photo,
                 area=activity.area,
                 original_date=activity.date,
@@ -200,8 +311,57 @@ def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> 
                 original_manager_name=activity.manager.name,
                 order=card_order,
             )
+
+
+@transaction.atomic
+def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> WeeklyReport:
+    try:
+        cycle = WeeklyCycle.objects.select_for_update().get(pk=cycle_id)
+    except WeeklyCycle.DoesNotExist as exc:
+        raise DomainError("Ciclo não encontrado.", 404) from exc
+    activities = _selected_activities(cycle=cycle, activity_ids=activity_ids)
+    existing = WeeklyReport.objects.select_for_update().filter(cycle=cycle).first()
+    if existing:
+        if existing.status == ReportStatus.SELECTING:
+            _populate_report(existing, activities, replacing=True)
+            audit(
+                actor,
+                "report.selection_replaced",
+                existing,
+                activities=[str(value) for value in activity_ids],
+            )
+            return report_queryset().get(pk=existing.pk)
+        existing_ids = set(existing.selected_activities.values_list("id", flat=True))
+        if existing_ids != set(activity_ids):
+            raise DomainError("O rascunho deste ciclo já foi criado e sua seleção está fechada.", 409)
+        return report_queryset().get(pk=existing.pk)
+    report = WeeklyReport.objects.create(cycle=cycle, status=ReportStatus.DRAFT)
+    _populate_report(report, activities)
     audit(actor, "report.draft_generated", report, activities=[str(value) for value in activity_ids])
     return report_queryset().get(pk=report.pk)
+
+
+@transaction.atomic
+def reopen_report_selection(*, actor: User, report: WeeklyReport) -> WeeklyReport:
+    report = WeeklyReport.objects.select_for_update().get(pk=report.pk)
+    if report.versions.exists():
+        raise DomainError("A seleção não pode ser reaberta depois da primeira versão do PDF.", 409)
+    if report.status == ReportStatus.SELECTING:
+        return report_queryset().get(pk=report.pk)
+    report.status = ReportStatus.SELECTING
+    report.content_version += 1
+    report.save(update_fields=("status", "content_version", "updated_at"))
+    audit(actor, "report.selection_reopened", report)
+    return report_queryset().get(pk=report.pk)
+
+
+@transaction.atomic
+def cancel_report_draft(*, actor: User, report: WeeklyReport) -> None:
+    report = WeeklyReport.objects.select_for_update().get(pk=report.pk)
+    if report.versions.exists():
+        raise DomainError("Um relatório publicado não pode ser cancelado.", 409)
+    audit(actor, "report.draft_cancelled", report)
+    report.delete()
 
 
 @transaction.atomic
@@ -217,13 +377,33 @@ def update_card(*, actor: User, card: ReportCard, changes: dict) -> ReportCard:
         "editorialTitle": "editorial_title",
         "editorialSummary": "editorial_summary",
         "editorialResult": "editorial_result",
+        "editorialEvidence": "editorial_evidence",
+        "editorialNextStep": "editorial_next_step",
+        "decisionRequest": "decision_request",
+        "nextStepOwner": "next_step_owner",
     }
     for input_name, model_name in field_map.items():
         if input_name in changes:
-            value = changes[input_name].strip()
-            if not value:
+            raw_value = changes[input_name]
+            if raw_value is None:
+                raise DomainError("Campos editoriais de texto não aceitam valor nulo.")
+            value = raw_value.strip()
+            if not value and input_name in {"editorialTitle", "editorialSummary", "editorialResult"}:
                 raise DomainError("Campos editoriais não podem ficar vazios.")
+            if len(value) > EDITORIAL_LIMITS[input_name]:
+                raise DomainError(
+                    f"O campo editorial deve ter no máximo {EDITORIAL_LIMITS[input_name]} caracteres."
+                )
             setattr(card, model_name, value)
+    if "executiveClassification" in changes:
+        classification = changes["executiveClassification"]
+        if classification not in ExecutiveClassification.values:
+            raise DomainError("Classificação executiva inválida.")
+        card.executive_classification = classification
+    if "needsDecision" in changes:
+        card.needs_decision = changes["needsDecision"]
+    if "nextStepDueDate" in changes:
+        card.next_step_due_date = changes["nextStepDueDate"]
     if photo_id is not None:
         try:
             card.selected_photo = card.activity_report.photos.get(pk=photo_id)
@@ -238,6 +418,40 @@ def update_card(*, actor: User, card: ReportCard, changes: dict) -> ReportCard:
     )
     audit(actor, "report.card_updated", card, fields=sorted(changes))
     return card
+
+
+@transaction.atomic
+def update_report(*, actor: User, report: WeeklyReport, executive_summary: str) -> WeeklyReport:
+    report = WeeklyReport.objects.select_for_update().get(pk=report.pk)
+    value = executive_summary.strip()
+    if len(value) > EXECUTIVE_LIMITS["executiveSummary"]:
+        raise DomainError(
+            f"A leitura da semana deve ter no máximo {EXECUTIVE_LIMITS['executiveSummary']} caracteres."
+        )
+    report.executive_summary = value
+    report.status = ReportStatus.EDITING
+    report.content_version += 1
+    report.save(update_fields=("executive_summary", "status", "content_version", "updated_at"))
+    audit(actor, "report.executive_summary_updated", report)
+    return report_queryset().get(pk=report.pk)
+
+
+@transaction.atomic
+def update_section(*, actor: User, section: ReportSection, executive_summary: str) -> WeeklyReport:
+    report = WeeklyReport.objects.select_for_update().get(pk=section.weekly_report_id)
+    section = ReportSection.objects.select_for_update().get(pk=section.pk)
+    value = executive_summary.strip()
+    if len(value) > EXECUTIVE_LIMITS["sectionExecutiveSummary"]:
+        raise DomainError(
+            f"A síntese da área deve ter no máximo {EXECUTIVE_LIMITS['sectionExecutiveSummary']} caracteres."
+        )
+    section.executive_summary = value
+    section.save(update_fields=("executive_summary", "updated_at"))
+    report.status = ReportStatus.EDITING
+    report.content_version += 1
+    report.save(update_fields=("status", "content_version", "updated_at"))
+    audit(actor, "report.section_summary_updated", section)
+    return report_queryset().get(pk=report.pk)
 
 
 @transaction.atomic
@@ -273,6 +487,21 @@ def remove_card(*, actor: User, card: ReportCard) -> WeeklyReport:
     return report_queryset().get(pk=report.pk)
 
 
+@transaction.atomic
+def restore_card(*, actor: User, card: ReportCard) -> WeeklyReport:
+    WeeklyReport.objects.select_for_update().get(pk=card.section.weekly_report_id)
+    card = ReportCard.objects.select_for_update().select_related("section__weekly_report").get(pk=card.pk)
+    if card.removed:
+        card.removed = False
+        card.save(update_fields=("removed", "updated_at"))
+        report = card.section.weekly_report
+        report.status = ReportStatus.EDITING
+        report.content_version += 1
+        report.save(update_fields=("status", "content_version", "updated_at"))
+        audit(actor, "report.card_restored", card)
+    return report_queryset().get(pk=card.section.weekly_report_id)
+
+
 def generate_pdf_version(*, actor: User, report_id: UUID) -> ReportVersion:
     started = monotonic()
     with transaction.atomic():
@@ -280,8 +509,57 @@ def generate_pdf_version(*, actor: User, report_id: UUID) -> ReportVersion:
             report = report_queryset().select_for_update().get(pk=report_id)
         except WeeklyReport.DoesNotExist as exc:
             raise DomainError("Relatório não encontrado.", 404) from exc
-        if not any(not card.removed for section in report.sections.all() for card in section.cards.all()):
+        if report.status == ReportStatus.SELECTING:
+            raise DomainError("Conclua a seleção editorial antes de gerar o PDF.", 409)
+        active_cards = [
+            card for section in report.sections.all() for card in section.cards.all() if not card.removed
+        ]
+        if not active_cards:
             raise DomainError("O relatório precisa ter ao menos um card ativo.")
+        if not report.executive_summary.strip():
+            raise DomainError("Preencha a leitura executiva da semana antes de gerar o PDF.")
+        highlights = [
+            card
+            for card in active_cards
+            if card.executive_classification == ExecutiveClassification.HIGHLIGHT
+        ]
+        attention = [
+            card
+            for card in active_cards
+            if card.executive_classification == ExecutiveClassification.ATTENTION
+        ]
+        if len(highlights) > 3:
+            raise DomainError("Selecione no máximo 3 destaques executivos.")
+        if len(attention) > 3:
+            raise DomainError("Selecione no máximo 3 pontos de atenção.")
+        if any(not card.editorial_evidence.strip() for card in highlights):
+            raise DomainError("Todo destaque executivo precisa apresentar uma evidência.")
+        if any(card.needs_decision and not card.decision_request.strip() for card in active_cards):
+            raise DomainError("Toda decisão necessária precisa informar claramente o pedido.")
+        incomplete_next_steps = [
+            card
+            for card in active_cards
+            if card.editorial_next_step.strip()
+            and (not card.next_step_owner.strip() or card.next_step_due_date is None)
+        ]
+        if incomplete_next_steps:
+            raise DomainError("Todo próximo passo precisa ter responsável e prazo.")
+        for section in report.sections.all():
+            for card in section.cards.all():
+                if card.removed:
+                    continue
+                values = {
+                    "editorialTitle": card.editorial_title,
+                    "editorialSummary": card.editorial_summary,
+                    "editorialResult": card.editorial_result,
+                    "editorialEvidence": card.editorial_evidence,
+                    "editorialNextStep": card.editorial_next_step,
+                }
+                if any(len(value.strip()) > EDITORIAL_LIMITS[field] for field, value in values.items()):
+                    raise DomainError(
+                        f'O card "{card.editorial_title[:40]}" excede o limite da síntese. '
+                        "Resuma-o antes de gerar o PDF."
+                    )
         snapshot_content_version = report.content_version
 
     # Report content has been fully prefetched and can be rendered without holding a database lock.

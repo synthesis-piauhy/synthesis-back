@@ -20,6 +20,16 @@ def private_response(file, *, content_type, filename, attachment=False):
 
 @api_controller("/files", tags=["private files"])
 class FileController:
+    @http_get("/avatar")
+    def avatar(self, request):
+        if not request.user.avatar:
+            raise HttpError(404, "Foto de perfil indisponível.")
+        try:
+            file = request.user.avatar.open("rb")
+        except OSError as exc:
+            raise HttpError(404, "Foto de perfil indisponível.") from exc
+        return private_response(file, content_type="image/jpeg", filename="perfil.jpg")
+
     @http_get("/photos/{photo_id}")
     def photo(self, request, photo_id: UUID):
         photos = ActivityPhoto.objects.all()

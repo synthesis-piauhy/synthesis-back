@@ -14,6 +14,15 @@ def user_data(user: User) -> dict:
     }
 
 
+def profile_data(user: User, request: HttpRequest) -> dict:
+    data = user_data(user)
+    data["avatarUrl"] = (
+        request.build_absolute_uri(f"/api/files/avatar?v={user.avatar.name.rsplit('/', 1)[-1]}")
+        if user.avatar else None
+    )
+    return data
+
+
 def cycle_data(cycle: WeeklyCycle) -> dict:
     return {
         "id": cycle.id,
@@ -39,6 +48,7 @@ def activity_data(activity: ActivityReport, request: HttpRequest) -> dict:
         "evidence": activity.evidence,
         "nextStep": activity.next_step,
         "internalNotes": activity.internal_notes,
+        "guidedAnswers": activity.guided_answers,
         "area": activity.area.name,
         "managerId": activity.manager_id,
         "cycleId": activity.cycle_id,

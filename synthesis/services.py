@@ -1,3 +1,4 @@
+import json
 import logging
 from collections import defaultdict
 from time import monotonic
@@ -9,6 +10,7 @@ from django.db import transaction
 from django.db.models import F, Max
 from django.utils import timezone
 
+from . import notifications
 from .activity_templates import (
     ACTIVE_TEMPLATE_KEYS,
     EDITORIAL_LIMITS,
@@ -65,6 +67,17 @@ def _validate_text(data: dict) -> None:
             raise DomainError(f"O campo {field} deve ter no máximo {maximum} caracteres.")
 
 
+def _validate_guided_answers(answers: object) -> None:
+    if not isinstance(answers, dict) or len(answers) > 20:
+        raise DomainError("Respostas guiadas inválidas.")
+    if any(
+        not isinstance(key, str) or len(key) > 50
+        or not isinstance(value, str) or len(value) > 300
+        for key, value in answers.items()
+    ):
+        raise DomainError("Respostas guiadas inválidas.")
+
+
 def create_activity(*, actor: User, data: dict, photos: list) -> ActivityReport:
     if len(photos) > MAX_PHOTOS or sum(photo.size for photo in photos) > MAX_UPLOAD_BYTES:
         raise DomainError("Envie até 10 fotos, somando no máximo 25 MB.")
@@ -98,6 +111,11 @@ def _create_activity(*, actor: User, data: dict, photos: list, saved_files: list
     data["template_version"] = TEMPLATE_VERSION
     data["next_step"] = data.pop("nextStep", "").strip()
     data["internal_notes"] = data.pop("internalNotes", "").strip()
+    try:
+        data["guided_answers"] = json.loads(data.pop("guidedAnswers", "{}"))
+    except (TypeError, ValueError) as exc:
+        raise DomainError("Respostas guiadas inválidas.") from exc
+    _validate_guided_answers(data["guided_answers"])
     data["evidence"] = data.get("evidence", "").strip()
     try:
         cycle = WeeklyCycle.objects.get(pk=data.pop("cycleId"))
@@ -123,6 +141,7 @@ def _create_activity(*, actor: User, data: dict, photos: list, saved_files: list
         photo.save()
         saved_files.append((photo.image.storage, photo.image.name))
     audit(actor, "activity.created", report)
+    notifications.activity_created(actor, report)
     return report
 
 
@@ -140,6 +159,9 @@ def update_own_activity(*, actor: User, report: ActivityReport, changes: dict) -
         changes["next_step"] = changes.pop("nextStep").strip()
     if "internalNotes" in changes:
         changes["internal_notes"] = changes.pop("internalNotes").strip()
+    if "guidedAnswers" in changes:
+        changes["guided_answers"] = changes.pop("guidedAnswers")
+        _validate_guided_answers(changes["guided_answers"])
     for field, value in changes.items():
         setattr(report, field, value)
     try:
@@ -148,6 +170,7 @@ def update_own_activity(*, actor: User, report: ActivityReport, changes: dict) -
         raise DomainError(" ".join(exc.messages)) from exc
     report.save()
     audit(actor, "activity.updated", report, fields=sorted(changes))
+    notifications.activity_updated(actor, report)
     return report
 
 
@@ -182,6 +205,7 @@ def create_cycle(*, actor: User, label: str, starts_at, ends_at, deadline) -> We
         raise DomainError(" ".join(exc.messages)) from exc
     cycle.save()
     audit(actor, "cycle.created", cycle)
+    notifications.cycle_opened(actor, cycle)
     return cycle
 
 
@@ -193,6 +217,7 @@ def close_cycle(*, actor: User, cycle: WeeklyCycle) -> WeeklyCycle:
     cycle.status = CollectionStatus.CLOSED
     cycle.save(update_fields=("status", "updated_at"))
     audit(actor, "cycle.closed", cycle)
+    notifications.cycle_closed(actor, cycle)
     return cycle
 
 
@@ -210,6 +235,7 @@ def update_cycle_deadline(*, actor: User, cycle: WeeklyCycle, deadline) -> Weekl
     cycle.deadline = deadline
     cycle.save(update_fields=("deadline", "updated_at"))
     audit(actor, "cycle.deadline_updated", cycle, deadline=deadline.isoformat())
+    notifications.cycle_deadline_updated(actor, cycle)
     return cycle
 
 
@@ -238,6 +264,7 @@ def reopen_cycle(*, actor: User, cycle: WeeklyCycle, reason: str, new_deadline) 
     cycle.deadline = new_deadline
     cycle.save(update_fields=("status", "reopen_reason", "deadline", "updated_at"))
     audit(actor, "cycle.reopened", cycle, reason=reason)
+    notifications.cycle_reopened(actor, cycle)
     return cycle
 
 
@@ -338,6 +365,7 @@ def generate_draft(*, actor: User, cycle_id: UUID, activity_ids: list[UUID]) -> 
     report = WeeklyReport.objects.create(cycle=cycle, status=ReportStatus.DRAFT)
     _populate_report(report, activities)
     audit(actor, "report.draft_generated", report, activities=[str(value) for value in activity_ids])
+    notifications.draft_generated(actor, report)
     return report_queryset().get(pk=report.pk)
 
 
@@ -581,6 +609,7 @@ def generate_pdf_version(*, actor: User, report_id: UUID) -> ReportVersion:
             current.status = ReportStatus.PDF_GENERATED
             current.save(update_fields=("status", "updated_at"))
             audit(actor, "report.pdf_generated", version, version=next_version)
+            notifications.pdf_generated(actor, version)
     except Exception:
         if saved_file:
             saved_file[0].delete(saved_file[1])

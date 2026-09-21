@@ -8,7 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from synthesis.administration import RESOURCES
-from synthesis.models import Area, AuditEvent, User, WeeklyCycle
+from synthesis.models import Area, AuditEvent, Notification, User, WeeklyCycle
 from synthesis.services import generate_draft, generate_pdf_version
 
 from .test_api import authenticated_client
@@ -190,6 +190,7 @@ def test_cycle_create_close_reopen_and_protect_activity_dates(admin_user, activi
     response = call(admin_user, "post", "cycles", values)
     assert response.status_code == 201, response.content
     new_id = response.json()["id"]
+    assert Notification.objects.filter(user=activity.manager, message__contains="foi aberto").exists()
     assert call(admin_user, "put", f"cycles/{new_id}", {**values, "status": "encerrada"}).status_code == 200
     assert WeeklyCycle.objects.get(pk=new_id).status == "encerrada"
     assert call(admin_user, "put", f"cycles/{new_id}", {**values, "status": "reaberta"}).status_code == 400
@@ -200,6 +201,7 @@ def test_cycle_create_close_reopen_and_protect_activity_dates(admin_user, activi
         {**values, "status": "reaberta", "reopen_reason": "Correções autorizadas"},
     )
     assert response.status_code == 200, response.content
+    assert Notification.objects.filter(user=activity.manager, message__contains="foi reaberto").exists()
     assert (
         call(
             admin_user,

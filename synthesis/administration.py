@@ -15,6 +15,7 @@ from ninja import Schema
 from ninja.errors import HttpError
 from ninja_extra import api_controller, http_delete, http_get, http_post, http_put
 
+from . import notifications
 from .models import (
     ActivityPhoto,
     ActivityReport,
@@ -565,6 +566,10 @@ def validated_form(request, key, payload, instance):
 def persist_form(request, key, instance, form):
     try:
         with transaction.atomic():
+            previous_cycle = (
+                WeeklyCycle.objects.filter(pk=instance.pk).values("status", "deadline").first()
+                if key == "cycles" and instance else None
+            )
             obj = form.save()
             audit(
                 request.user,
@@ -574,6 +579,8 @@ def persist_form(request, key, instance, form):
             )
             if key == "users" and form.cleaned_data.get("password"):
                 audit(request.user, "admin.users.password_changed", obj)
+            if key == "cycles":
+                notifications.cycle_changed(request.user, obj, previous_cycle)
     except IntegrityError as error:
         raise HttpError(409, "Já existe um registro com esses dados.") from error
     return obj

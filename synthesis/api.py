@@ -9,6 +9,7 @@ from .controllers import (
     CollectionController,
     CycleController,
     HealthController,
+    NotificationController,
     UserController,
     WeeklyReportController,
 )
@@ -24,6 +25,7 @@ api.register_controllers(
     FileController,
     HealthController,
     AuthenticatedUserController,
+    NotificationController,
     AreaController,
     UserController,
     CycleController,

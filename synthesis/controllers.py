@@ -4,6 +4,7 @@ from uuid import UUID
 from django.db import connection
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from ninja import File, Form
 from ninja.errors import HttpError
 from ninja.files import UploadedFile
@@ -14,6 +15,7 @@ from .models import (
     ActivityReport,
     Area,
     CollectionStatus,
+    Notification,
     ReportCard,
     ReportSection,
     ReportStatus,
@@ -23,8 +25,10 @@ from .models import (
     WeeklyCycle,
     WeeklyReport,
 )
+from .notifications import ensure_deadline_reminders
 from .pagination import Page, paginate
 from .permissions import EditorOnly, EditorOrAdmin, ManagerOnly
+from .profile import remove_avatar, replace_avatar, update_name
 from .schemas import (
     ActivityCreateIn,
     ActivityReportOut,
@@ -33,6 +37,9 @@ from .schemas import (
     CycleDeadlineUpdateIn,
     GenerateDraftIn,
     MessageOut,
+    NotificationFeedOut,
+    NotificationOut,
+    ProfileNameUpdateIn,
     ReopenCollectionIn,
     ReorderCardsIn,
     ReportCardOut,
@@ -45,7 +52,15 @@ from .schemas import (
     WeeklyReportOut,
     WeeklyReportUpdateIn,
 )
-from .serializers import activity_data, card_data, cycle_data, report_data, user_data, version_data
+from .serializers import (
+    activity_data,
+    card_data,
+    cycle_data,
+    profile_data,
+    report_data,
+    user_data,
+    version_data,
+)
 from .services import (
     DomainError,
     cancel_report_draft,
@@ -76,6 +91,43 @@ def activity_queryset():
     return ActivityReport.objects.select_related("area", "manager", "cycle").prefetch_related("photos")
 
 
+def notification_data(item: Notification) -> dict:
+    return {
+        "id": item.id,
+        "userId": item.user_id,
+        "kind": item.kind,
+        "message": item.message,
+        "href": item.href,
+        "read": item.read_at is not None,
+        "createdAt": item.created_at,
+    }
+
+
+@api_controller("/notifications", tags=["notifications"])
+class NotificationController:
+    @http_get("", response=NotificationFeedOut)
+    def list_notifications(self, request):
+        ensure_deadline_reminders(request.user)
+        queryset = Notification.objects.filter(user=request.user)
+        return {
+            "items": [notification_data(item) for item in queryset[:50]],
+            "unreadCount": queryset.filter(read_at__isnull=True).count(),
+        }
+
+    @http_patch("/{notification_id}/read", response=NotificationOut)
+    def mark_read(self, request, notification_id: UUID):
+        item = get_object_or_404(Notification, pk=notification_id, user=request.user)
+        if item.read_at is None:
+            item.read_at = timezone.now()
+            item.save(update_fields=("read_at",))
+        return notification_data(item)
+
+    @http_post("/read-all", response=MessageOut)
+    def mark_all_read(self, request):
+        Notification.objects.filter(user=request.user, read_at__isnull=True).update(read_at=timezone.now())
+        return {"detail": "Notificações marcadas como lidas."}
+
+
 @api_controller("/health", tags=["health"], auth=None, permissions=[permissions.AllowAny])
 class HealthController:
     @http_get("", response=MessageOut)
@@ -97,7 +149,28 @@ class HealthController:
 class AuthenticatedUserController:
     @http_get("", response=UserOut)
     def me(self, request):
-        return user_data(request.user)
+        return profile_data(request.user, request)
+
+    @http_patch("", response=UserOut)
+    def update_name(self, request, payload: ProfileNameUpdateIn):
+        try:
+            user = update_name(actor=request.user, name=payload.name)
+        except DomainError as error:
+            raise_domain_error(error)
+        return profile_data(user, request)
+
+    @http_post("/avatar", response=UserOut)
+    def update_avatar(self, request, avatar: File[UploadedFile]):
+        try:
+            user = replace_avatar(actor=request.user, upload=avatar)
+        except DomainError as error:
+            raise_domain_error(error)
+        return profile_data(user, request)
+
+    @http_delete("/avatar", response=UserOut)
+    def delete_avatar(self, request):
+        user = remove_avatar(actor=request.user)
+        return profile_data(user, request)
 
 
 @api_controller("/areas", tags=["areas"])

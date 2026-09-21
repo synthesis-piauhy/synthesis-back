@@ -3,13 +3,28 @@ from datetime import datetime as DateTime
 from uuid import UUID
 
 from ninja import Schema
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from .activity_templates import PUBLISHABLE_LIMITS
 
 
 class MessageOut(Schema):
     detail: str
+
+
+class NotificationOut(Schema):
+    id: UUID
+    userId: UUID
+    kind: str
+    message: str
+    href: str
+    read: bool
+    createdAt: DateTime
+
+
+class NotificationFeedOut(Schema):
+    items: list[NotificationOut]
+    unreadCount: int
 
 
 class UserOut(Schema):
@@ -19,6 +34,12 @@ class UserOut(Schema):
     area: str | None
     role: str
     active: bool
+    avatarUrl: str | None = None
+
+
+class ProfileNameUpdateIn(Schema):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=2, max_length=150)
 
 
 class WeeklyCycleOut(Schema):
@@ -62,6 +83,7 @@ class ActivityReportOut(Schema):
     evidence: str
     nextStep: str
     internalNotes: str
+    guidedAnswers: dict[str, str] = Field(default_factory=dict)
     area: str
     managerId: UUID
     cycleId: UUID
@@ -81,6 +103,7 @@ class ActivityCreateIn(Schema):
     evidence: str = Field(default="", max_length=PUBLISHABLE_LIMITS["evidence"])
     nextStep: str = Field(default="", max_length=PUBLISHABLE_LIMITS["nextStep"])
     internalNotes: str = Field(default="", max_length=PUBLISHABLE_LIMITS["internalNotes"])
+    guidedAnswers: str = Field(default="{}", max_length=4000)
     cycleId: UUID
 
 
@@ -98,6 +121,7 @@ class ActivityUpdateIn(Schema):
     evidence: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["evidence"])
     nextStep: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["nextStep"])
     internalNotes: str | None = Field(default=None, max_length=PUBLISHABLE_LIMITS["internalNotes"])
+    guidedAnswers: dict[str, str] | None = None
 
 
 class ReportCardOut(Schema):

@@ -54,6 +54,11 @@ class User(AbstractUser):
     session_version = models.PositiveIntegerField(default=0, editable=False)
     area = models.ForeignKey(Area, on_delete=models.PROTECT, related_name="users", null=True, blank=True)
     active = models.BooleanField(default=True)
+    avatar = models.ImageField(
+        upload_to="avatars/%Y/%m/",
+        blank=True,
+        validators=[validate_image_size, validate_image_content_type],
+    )
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS: list[str] = []
@@ -143,7 +148,8 @@ class WeeklyCycle(TimestampedModel):
         super().clean()
         if self.status in {CollectionStatus.OPEN, CollectionStatus.REOPENED}:
             another_active = (
-                type(self).objects.filter(status__in=(CollectionStatus.OPEN, CollectionStatus.REOPENED))
+                type(self)
+                .objects.filter(status__in=(CollectionStatus.OPEN, CollectionStatus.REOPENED))
                 .exclude(pk=self.pk)
                 .exists()
             )
@@ -174,6 +180,7 @@ class ActivityReport(TimestampedModel):
     evidence = models.CharField(max_length=100, blank=True)
     next_step = models.CharField(max_length=140, blank=True)
     internal_notes = models.TextField(blank=True)
+    guided_answers = models.JSONField(default=dict, blank=True)
     area = models.ForeignKey(Area, on_delete=models.PROTECT, related_name="activity_reports")
     manager = models.ForeignKey(User, on_delete=models.PROTECT, related_name="activity_reports")
     cycle = models.ForeignKey(WeeklyCycle, on_delete=models.PROTECT, related_name="activity_reports")
@@ -408,6 +415,29 @@ class AuditEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.action} — {self.entity}:{self.entity_id}"
+
+
+class Notification(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notifications")
+    kind = models.CharField(max_length=32)
+    message = models.CharField(max_length=300)
+    href = models.CharField(max_length=255)
+    dedupe_key = models.CharField(max_length=160)
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(fields=("user", "dedupe_key"), name="notification_user_event_unique"),
+        ]
+        indexes = [
+            models.Index(fields=("user", "read_at", "-created_at"), name="notif_user_read_date_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return self.message
 
 
 class RateWindow(models.Model):

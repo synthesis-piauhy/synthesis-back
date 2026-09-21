@@ -57,6 +57,7 @@ def test_manager_creates_activity_with_multipart_upload(manager, cycle):
             "evidence": "24 planos de melhoria elaborados",
             "nextStep": "Acompanhar os planos no próximo ciclo.",
             "internalNotes": "Detalhes disponíveis somente para conferência.",
+            "guidedAnswers": json.dumps({"kind": "Oficina", "subject": "boas práticas"}),
             "cycleId": str(cycle.id),
             "photos": [image_upload()],
         },
@@ -69,6 +70,16 @@ def test_manager_creates_activity_with_multipart_upload(manager, cycle):
     assert body["photos"][0]["isMain"] is True
     assert body["templateKey"] == "acao_evento"
     assert body["evidence"] == "24 planos de melhoria elaborados"
+    assert body["guidedAnswers"] == {"kind": "Oficina", "subject": "boas práticas"}
+
+    updated = client.patch(
+        f"/api/activity-reports/{body['id']}",
+        data=json.dumps({"guidedAnswers": {"kind": "Capacitação", "subject": "boas práticas"}}),
+        content_type="application/json",
+        **headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["guidedAnswers"]["kind"] == "Capacitação"
 
 
 @pytest.mark.django_db

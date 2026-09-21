@@ -51,6 +51,14 @@ def request_limits(request):
                 email = "invalid"
             limits.extend([("login-ip", ip, 30, 60), ("login-account", email, 10, 60)])
         return limits
+    if (
+        request.user.is_authenticated
+        and request.path == "/api/me/avatar"
+        and request.method in {"POST", "DELETE"}
+    ):
+        return [("profile-photo", str(request.user.pk), 10, 60)]
+    if request.user.is_authenticated and request.path == "/api/me" and request.method == "PATCH":
+        return [("profile-name", str(request.user.pk), 30, 60)]
     if request.method == "POST" and request.user.is_authenticated:
         identity = str(request.user.pk)
         if request.path == "/api/activity-reports":

@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
+from . import notifications
 from .models import (
     ActivityPhoto,
     ActivityReport,
@@ -39,7 +40,19 @@ class UserAdmin(DjangoUserAdmin):
 
 
 admin.site.register(Area)
-admin.site.register(WeeklyCycle)
+
+
+@admin.register(WeeklyCycle)
+class WeeklyCycleAdmin(admin.ModelAdmin):
+    def save_model(self, request, obj, form, change):
+        previous = (
+            WeeklyCycle.objects.filter(pk=obj.pk).values("status", "deadline").first()
+            if change else None
+        )
+        super().save_model(request, obj, form, change)
+        notifications.cycle_changed(request.user, obj, previous)
+
+
 admin.site.register(ActivityReport)
 admin.site.register(ActivityPhoto)
 

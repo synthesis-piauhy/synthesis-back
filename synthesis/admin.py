@@ -46,8 +46,7 @@ admin.site.register(Area)
 class WeeklyCycleAdmin(admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         previous = (
-            WeeklyCycle.objects.filter(pk=obj.pk).values("status", "deadline").first()
-            if change else None
+            WeeklyCycle.objects.filter(pk=obj.pk).values("status", "deadline").first() if change else None
         )
         super().save_model(request, obj, form, change)
         notifications.cycle_changed(request.user, obj, previous)

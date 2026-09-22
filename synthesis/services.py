@@ -71,8 +71,7 @@ def _validate_guided_answers(answers: object) -> None:
     if not isinstance(answers, dict) or len(answers) > 20:
         raise DomainError("Respostas guiadas inválidas.")
     if any(
-        not isinstance(key, str) or len(key) > 50
-        or not isinstance(value, str) or len(value) > 300
+        not isinstance(key, str) or len(key) > 50 or not isinstance(value, str) or len(value) > 300
         for key, value in answers.items()
     ):
         raise DomainError("Respostas guiadas inválidas.")

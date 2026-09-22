@@ -68,10 +68,14 @@ def test_completed_activity_notifies_manager_and_only_own_notifications_are_read
     report = create_activity(
         actor=manager,
         data={
-            "templateKey": "acao_evento", "title": "Oficina de boas práticas", "date": cycle.starts_at,
-            "location": "Centro", "summary": "Atividade realizada com participantes da área.",
+            "templateKey": "acao_evento",
+            "title": "Oficina de boas práticas",
+            "date": cycle.starts_at,
+            "location": "Centro",
+            "summary": "Atividade realizada com participantes da área.",
             "result": "Participantes concluíram seus planos de melhoria.",
-            "beneficiaries": "24 participantes", "cycleId": cycle.id,
+            "beneficiaries": "24 participantes",
+            "cycleId": cycle.id,
         },
         photos=[image_upload()],
     )

@@ -568,7 +568,8 @@ def persist_form(request, key, instance, form):
         with transaction.atomic():
             previous_cycle = (
                 WeeklyCycle.objects.filter(pk=instance.pk).values("status", "deadline").first()
-                if key == "cycles" and instance else None
+                if key == "cycles" and instance
+                else None
             )
             obj = form.save()
             audit(

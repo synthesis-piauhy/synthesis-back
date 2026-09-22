@@ -33,9 +33,13 @@ def test_user_can_change_only_own_name_and_cannot_edit_login_email_or_area(manag
 
     forged = client.patch(
         "/api/me",
-        data=json.dumps({
-            "name": "Nome Falso", "email": other_manager.email, "area": other_manager.area.name,
-        }),
+        data=json.dumps(
+            {
+                "name": "Nome Falso",
+                "email": other_manager.email,
+                "area": other_manager.area.name,
+            }
+        ),
         content_type="application/json",
         **headers,
     )

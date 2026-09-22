@@ -18,7 +18,8 @@ def profile_data(user: User, request: HttpRequest) -> dict:
     data = user_data(user)
     data["avatarUrl"] = (
         request.build_absolute_uri(f"/api/files/avatar?v={user.avatar.name.rsplit('/', 1)[-1]}")
-        if user.avatar else None
+        if user.avatar
+        else None
     )
     return data
 

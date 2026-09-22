@@ -49,6 +49,17 @@ if PRODUCTION and (
 SECURE_SSL_REDIRECT = PRODUCTION
 SESSION_COOKIE_SECURE = PRODUCTION
 CSRF_COOKIE_SECURE = PRODUCTION
+if not PRODUCTION and os.getenv("SYNTHESIS_PUBLIC_PREVIEW") == "true":
+    if DEBUG or urlparse(PUBLIC_ORIGIN).scheme != "https":
+        raise ImproperlyConfigured("Preview público requer DEBUG=false e PUBLIC_ORIGIN HTTPS.")
+    if (
+        len(SECRET_KEY) < 50
+        or len(set(SECRET_KEY)) < 10
+        or any(word in SECRET_KEY.lower() for word in ("unsafe", "troque", "change-me"))
+    ):
+        raise ImproperlyConfigured("Preview público requer SECRET_KEY forte no arquivo .env.")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_TRUSTED_ORIGINS = [PUBLIC_ORIGIN]

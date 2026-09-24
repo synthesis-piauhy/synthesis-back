@@ -11,10 +11,12 @@ dependencies = [
     "django-ninja-extra>=0.31,<0.32",
     "django-ninja-jwt>=5.3,<6",
     "django-storages[s3]>=1.14,<2",
+    "gunicorn>=23,<24",
     "pillow>=11,<13",
     "psycopg[binary]>=3.2,<4",
     "python-dotenv>=1.1,<2",
     "reportlab>=4.4,<5",
+    "whitenoise>=6.9,<7",
 ]
 
 [dependency-groups]

@@ -1,0 +1,16 @@
+.git
+.github
+.agents
+.codex
+.env
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__/
+*.py[cod]
+*.sqlite3
+Dockerfile*
+compose*.yaml
+media/
+staticfiles/
+tests/

@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -28,4 +29,39 @@ def test_production_check_and_fail_closed():
         {"PUBLIC_ORIGIN": "http://example.org"},
     ):
         bad = subprocess.run(command, env=production_env(**changes), capture_output=True, text=True)
+        assert bad.returncode != 0
+
+
+def test_public_https_preview_uses_secure_cookies_and_trusts_only_its_origin():
+    origin = "https://synthesis-preview.example.workers.dev"
+    env = production_env(
+        APP_ENV="development",
+        DJANGO_SETTINGS_MODULE="config.settings",
+        SYNTHESIS_PUBLIC_PREVIEW="true",
+        PUBLIC_ORIGIN=origin,
+        ALLOWED_HOSTS="127.0.0.1,localhost",
+    )
+    command = [
+        sys.executable,
+        "-c",
+        "import json; from django.conf import settings; print(json.dumps({"
+        "'debug': settings.DEBUG, 'session': settings.SESSION_COOKIE_SECURE, "
+        "'csrf': settings.CSRF_COOKIE_SECURE, 'trusted': settings.CSRF_TRUSTED_ORIGINS, "
+        "'cors': settings.CORS_ALLOWED_ORIGINS}))",
+    ]
+    good = subprocess.run(command, env=env, capture_output=True, text=True)
+    assert good.returncode == 0, good.stderr
+    assert json.loads(good.stdout) == {
+        "debug": False,
+        "session": True,
+        "csrf": True,
+        "trusted": [origin],
+        "cors": [origin],
+    }
+    for changes in (
+        {"DEBUG": "true"},
+        {"PUBLIC_ORIGIN": "http://example.workers.dev"},
+        {"SECRET_KEY": "weak"},
+    ):
+        bad = subprocess.run(command, env={**env, **changes}, capture_output=True, text=True)
         assert bad.returncode != 0

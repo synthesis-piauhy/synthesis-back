@@ -454,7 +454,7 @@ def display_field(obj, name, request):
         return [str(item) for item in value.all()], None
     if field.get_internal_type() in {"FileField", "ImageField"}:
         category = "photos" if name == "image" else "versions"
-        url = request.build_absolute_uri(f"/api/files/{category}/{obj.pk}") if value else None
+        url = f"/api/files/{category}/{obj.pk}" if value else None
         return value.name, url
     if field.is_relation:
         return str(value) if value else None, None

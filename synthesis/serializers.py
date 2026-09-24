@@ -17,7 +17,7 @@ def user_data(user: User) -> dict:
 def profile_data(user: User, request: HttpRequest) -> dict:
     data = user_data(user)
     data["avatarUrl"] = (
-        request.build_absolute_uri(f"/api/files/avatar?v={user.avatar.name.rsplit('/', 1)[-1]}")
+        f"/api/files/avatar?v={user.avatar.name.rsplit('/', 1)[-1]}"
         if user.avatar
         else None
     )
@@ -56,7 +56,7 @@ def activity_data(activity: ActivityReport, request: HttpRequest) -> dict:
         "photos": [
             {
                 "id": photo.id,
-                "url": request.build_absolute_uri(f"/api/files/photos/{photo.id}"),
+                "url": f"/api/files/photos/{photo.id}",
                 "name": photo.name,
                 "isMain": photo.is_main,
                 "alt": photo.alt,
@@ -110,7 +110,7 @@ def version_data(version: ReportVersion, request: HttpRequest) -> dict:
         "version": version.version,
         "generatedAt": version.generated_at,
         "generatedBy": version.generated_by_id,
-        "pdfUrl": request.build_absolute_uri(f"/api/files/versions/{version.id}"),
+        "pdfUrl": f"/api/files/versions/{version.id}",
     }
 
 

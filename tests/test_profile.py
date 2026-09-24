@@ -60,7 +60,7 @@ def test_avatar_is_normalized_private_replaced_and_removed(manager, other_manage
     response = client.post("/api/me/avatar", data={"avatar": image_upload("primeira.png")}, **headers)
     assert response.status_code == 200, response.content
     first_url = response.json()["avatarUrl"]
-    assert first_url
+    assert first_url.startswith("/api/files/avatar?v=")
     manager.refresh_from_db()
     first_name = manager.avatar.name
     assert first_name.endswith(".jpg") and "primeira" not in first_name

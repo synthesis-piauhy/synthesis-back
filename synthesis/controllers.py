@@ -519,4 +519,4 @@ class WeeklyReportController:
     @http_get("/versions/{version_id}/url", response=str)
     def version_url(self, request, version_id: UUID):
         version = get_object_or_404(ReportVersion, pk=version_id)
-        return request.build_absolute_uri(f"/api/files/versions/{version.id}")
+        return f"/api/files/versions/{version.id}"

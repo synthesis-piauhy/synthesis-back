@@ -17,6 +17,9 @@ def test_private_photo_permissions_and_legacy_path(activity, manager, other_mana
     assert outsider.get(url).status_code == 404
     for user in (manager, editor):
         client, _ = authenticated_client(user)
+        activity_response = client.get(f"/api/activity-reports/{activity.id}")
+        assert activity_response.status_code == 200
+        assert activity_response.json()["photos"][0]["url"] == url
         response = client.get(url)
         assert response.status_code == 200
         assert response["Content-Type"] == "image/jpeg"
@@ -32,6 +35,9 @@ def test_pdf_download_requires_editorial_or_admin_permission(activity, manager, 
     client, _ = authenticated_client(manager)
     assert client.get(url).status_code == 403
     client, _ = authenticated_client(editor)
+    assert client.get(f"/api/weekly-reports/versions/{version.id}/url").json() == url
+    versions = client.get(f"/api/weekly-reports/{report.id}/versions").json()
+    assert versions["items"][0]["pdfUrl"] == url
     response = client.get(url)
     assert response.status_code == 200
     assert b"".join(response.streaming_content).startswith(b"%PDF")

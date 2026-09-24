@@ -51,7 +51,7 @@ def user_values(user, **changes):
 
 def test_every_resource_has_list_and_detail_without_secrets(admin_user, activity, editor):
     report = generate_draft(actor=editor, cycle_id=activity.cycle_id, activity_ids=[activity.pk])
-    generate_pdf_version(actor=editor, report_id=report.pk)
+    version = generate_pdf_version(actor=editor, report_id=report.pk)
     Group.objects.create(name="Consulta")
     client, headers = authenticated_client(admin_user)
     response = client.get("/api/administration/resources", **headers)
@@ -65,6 +65,10 @@ def test_every_resource_has_list_and_detail_without_secrets(admin_user, activity
             assert detail.status_code == 200, (resource, detail.content)
             assert "password" not in detail.json()["values"]
             assert "pbkdf2" not in detail.content.decode()
+            if resource == "photos":
+                assert detail.json()["files"]["image"] == f"/api/files/photos/{item['id']}"
+            if resource == "versions":
+                assert detail.json()["files"]["pdf"] == f"/api/files/versions/{version.pk}"
     assert client.get("/api/administration/unknown", **headers).status_code == 404
     assert client.get("/api/administration/users/not-a-uuid", **headers).status_code == 404
 

@@ -12,6 +12,7 @@ APP_ENV = os.getenv("APP_ENV", "development")
 if APP_ENV not in {"development", "test", "production"}:
     raise ImproperlyConfigured("APP_ENV deve ser development, test ou production.")
 PRODUCTION = APP_ENV == "production"
+PUBLIC_PREVIEW = not PRODUCTION and os.getenv("SYNTHESIS_PUBLIC_PREVIEW") == "true"
 if not PRODUCTION:
     load_dotenv(BASE_DIR / ".env")
 
@@ -49,7 +50,7 @@ if PRODUCTION and (
 SECURE_SSL_REDIRECT = PRODUCTION
 SESSION_COOKIE_SECURE = PRODUCTION
 CSRF_COOKIE_SECURE = PRODUCTION
-if not PRODUCTION and os.getenv("SYNTHESIS_PUBLIC_PREVIEW") == "true":
+if PUBLIC_PREVIEW:
     if DEBUG or urlparse(PUBLIC_ORIGIN).scheme != "https":
         raise ImproperlyConfigured("Preview público requer DEBUG=false e PUBLIC_ORIGIN HTTPS.")
     if (
@@ -163,7 +164,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CORS_ALLOWED_ORIGINS = [
     value for value in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if value
 ]
-if PRODUCTION:
+if PRODUCTION or PUBLIC_PREVIEW:
     CORS_ALLOWED_ORIGINS = [PUBLIC_ORIGIN]
 CORS_ALLOW_CREDENTIALS = True
 
